@@ -1,0 +1,92 @@
+use std::collections::HashMap;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineId {
+    Waifu2x,
+    RealEsrgan,
+}
+
+impl EngineId {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Waifu2x => "waifu2x",
+            Self::RealEsrgan => "real-esrgan",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Waifu2x => "waifu2x-ncnn-vulkan",
+            Self::RealEsrgan => "Real-ESRGAN-ncnn-vulkan",
+        }
+    }
+}
+
+impl FromStr for EngineId {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "waifu2x" => Ok(Self::Waifu2x),
+            "real-esrgan" => Ok(Self::RealEsrgan),
+            _ => Err(format!("未対応の AI エンジンです: {value}")),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedBook {
+    pub id: String,
+    pub file_name: String,
+    pub stored_path: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineRegistration {
+    pub executable_path: String,
+    pub model_name: Option<String>,
+    pub model_path: String,
+    pub registered_at: u64,
+    pub source: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct EngineRegistry {
+    pub engines: HashMap<EngineId, EngineRegistration>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineStatus {
+    pub id: EngineId,
+    pub label: String,
+    pub configured: bool,
+    pub ready: bool,
+    pub executable_path: Option<String>,
+    pub model_path: Option<String>,
+    pub model_name: Option<String>,
+    pub warning: Option<String>,
+    pub download_url: String,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhanceImageRequest {
+    pub engine_id: EngineId,
+    pub image_data_url: String,
+    pub scale: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhanceImageResponse {
+    pub image_data_url: String,
+}
