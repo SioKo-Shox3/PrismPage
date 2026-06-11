@@ -1,11 +1,18 @@
 use tauri::AppHandle;
 
-use crate::models::{EnhanceImageRequest, EnhanceImageResponse, EngineId, EngineStatus};
+use crate::models::{
+    EngineCandidate, EngineId, EngineStatus, EnhanceImageRequest, EnhanceImageResponse,
+};
 use crate::services::engines as engine_service;
 
 #[tauri::command]
 pub fn get_engine_statuses(app: AppHandle) -> Result<Vec<EngineStatus>, String> {
     engine_service::get_engine_statuses(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn detect_engine_candidates() -> Result<Vec<EngineCandidate>, String> {
+    engine_service::detect_engine_candidates().map_err(|error| error.to_string())
 }
 
 #[tauri::command]

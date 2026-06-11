@@ -1,21 +1,22 @@
-use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{env, fs};
 
-use base64::prelude::{BASE64_STANDARD, Engine};
+use base64::prelude::{Engine, BASE64_STANDARD};
 use tauri::{AppHandle, Manager};
 use tempfile::tempdir;
+use uuid::Uuid;
 use wait_timeout::ChildExt;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
 use crate::app_error::{AppError, AppResult};
 use crate::models::{
-    EnhanceImageRequest, EnhanceImageResponse, EngineId, EngineRegistration, EngineRegistry,
-    EngineStatus,
+    EngineCandidate, EngineId, EngineRegistration, EngineRegistry, EngineStatus,
+    EnhanceImageRequest, EnhanceImageResponse,
 };
 use crate::services::app_data_dir;
 use crate::state::RegistryLock;
@@ -33,8 +34,30 @@ struct EngineDescriptor {
     notes: &'static [&'static str],
 }
 
+const REALESRGAN_ANIME_MODEL: &str = "realesr-animevideov3";
+const REALESRGAN_ANIME_SCALE_MODELS: [&str; 3] = [
+    "realesr-animevideov3-x2",
+    "realesr-animevideov3-x3",
+    "realesr-animevideov3-x4",
+];
+const REALESRGAN_FALLBACK_MODELS: [&str; 2] = ["realesrgan-x4plus-anime", "realesrgan-x4plus"];
+
 fn descriptor(engine_id: EngineId) -> EngineDescriptor {
     match engine_id {
+        EngineId::RealCugan => EngineDescriptor {
+            id: engine_id,
+            download_url: "https://github.com/nihui/realcugan-ncnn-vulkan/releases",
+            executable_names: &[
+                #[cfg(target_os = "windows")]
+                "realcugan-ncnn-vulkan.exe",
+                #[cfg(not(target_os = "windows"))]
+                "realcugan-ncnn-vulkan",
+            ],
+            notes: &[
+                "RAIV 同梱版の Real-CUGAN を直接登録できます。",
+                "漫画・イラストの拡大では `models-se` を優先利用します。",
+            ],
+        },
         EngineId::Waifu2x => EngineDescriptor {
             id: engine_id,
             download_url: "https://github.com/nihui/waifu2x-ncnn-vulkan/releases",
@@ -90,11 +113,26 @@ fn save_registry(app: &AppHandle, registry: &EngineRegistry) -> AppResult<()> {
 }
 
 fn tools_dir(app: &AppHandle, engine_id: EngineId) -> AppResult<PathBuf> {
-    let path = app_data_dir(app)?
-        .join("tools")
-        .join(engine_id.as_str());
+    let path = app_data_dir(app)?.join("tools").join(engine_id.as_str());
     fs::create_dir_all(&path)?;
     Ok(path)
+}
+
+fn create_unique_extraction_root(app: &AppHandle, engine_id: EngineId) -> AppResult<PathBuf> {
+    let base_dir = tools_dir(app, engine_id)?;
+
+    for _ in 0..16 {
+        let candidate = base_dir.join(format!("{}-{}", now_unix(), Uuid::new_v4()));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Err(AppError::Message(
+        "AI エンジン ZIP の一時展開先を作成できませんでした。".into(),
+    ))
 }
 
 fn now_unix() -> u64 {
@@ -102,6 +140,10 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn all_engine_ids() -> [EngineId; 3] {
+    [EngineId::RealCugan, EngineId::Waifu2x, EngineId::RealEsrgan]
 }
 
 fn find_executable(root: &Path, executable_names: &[&str]) -> Option<PathBuf> {
@@ -122,34 +164,195 @@ fn find_executable(root: &Path, executable_names: &[&str]) -> Option<PathBuf> {
 }
 
 fn find_directory_named(root: &Path, directory_names: &[&str]) -> Option<PathBuf> {
-    WalkDir::new(root)
-        .max_depth(4)
-        .into_iter()
-        .filter_map(Result::ok)
-        .find(|entry| {
-            entry.file_type().is_dir()
-                && directory_names.iter().any(|expected| {
-                    entry
+    for expected in directory_names {
+        let detected = WalkDir::new(root)
+            .max_depth(4)
+            .into_iter()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry.file_type().is_dir()
+                    && entry
                         .file_name()
                         .to_string_lossy()
                         .eq_ignore_ascii_case(expected)
-                })
-        })
-        .map(|entry| entry.into_path())
+            })
+            .map(|entry| entry.into_path());
+
+        if detected.is_some() {
+            return detected;
+        }
+    }
+
+    None
+}
+
+fn directory_has_model_pair(directory: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return false;
+    };
+
+    entries.filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        path.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("bin"))
+            && path.with_extension("param").is_file()
+    })
+}
+
+fn model_pair_exists(model_root: &Path, model_name: &str) -> bool {
+    model_root.join(format!("{model_name}.bin")).is_file()
+        && model_root.join(format!("{model_name}.param")).is_file()
+}
+
+fn has_realesrgan_anime_model(model_root: &Path) -> bool {
+    model_pair_exists(model_root, REALESRGAN_ANIME_MODEL)
+        || REALESRGAN_ANIME_SCALE_MODELS
+            .iter()
+            .any(|model_name| model_pair_exists(model_root, model_name))
+}
+
+fn normalize_realesrgan_model_name(model_name: &str) -> &str {
+    if REALESRGAN_ANIME_SCALE_MODELS
+        .iter()
+        .any(|scale_model| model_name.eq_ignore_ascii_case(scale_model))
+    {
+        REALESRGAN_ANIME_MODEL
+    } else {
+        model_name
+    }
+}
+
+fn find_realesrgan_model(model_root: &Path) -> Option<String> {
+    if has_realesrgan_anime_model(model_root) {
+        return Some(REALESRGAN_ANIME_MODEL.to_string());
+    }
+
+    REALESRGAN_FALLBACK_MODELS
+        .iter()
+        .find(|model_name| model_pair_exists(model_root, model_name))
+        .map(|model_name| (*model_name).to_string())
+}
+
+fn canonicalize_existing_dir(path: &Path, error_message: &str) -> AppResult<PathBuf> {
+    if !path.is_dir() {
+        return Err(AppError::Message(error_message.into()));
+    }
+
+    Ok(fs::canonicalize(path)?)
+}
+
+fn candidate_root_priority(root: &Path) -> u8 {
+    if root.join("setting.json").is_file() && root.join("tools").is_dir() {
+        return 0;
+    }
+
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("tools"))
+    {
+        return 1;
+    }
+
+    2
+}
+
+fn validate_model_directory(model_path: &Path, engine_label: &str) -> AppResult<()> {
+    if !directory_has_model_pair(model_path) {
+        return Err(AppError::Message(format!(
+            "{engine_label} のモデルファイルが見つかりません。"
+        )));
+    }
+
+    Ok(())
+}
+
+fn is_realesrgan_anime_model_name(model_name: &str) -> bool {
+    model_name.eq_ignore_ascii_case(REALESRGAN_ANIME_MODEL)
+        || REALESRGAN_ANIME_SCALE_MODELS
+            .iter()
+            .any(|scale_model| model_name.eq_ignore_ascii_case(scale_model))
+}
+
+fn realesrgan_anime_scale_file_exists(model_root: &Path, scale: u8) -> bool {
+    model_pair_exists(model_root, &format!("{REALESRGAN_ANIME_MODEL}-x{scale}"))
+        || model_pair_exists(model_root, REALESRGAN_ANIME_MODEL)
+}
+
+fn find_realesrgan_fallback_model(model_root: &Path) -> Option<String> {
+    REALESRGAN_FALLBACK_MODELS
+        .iter()
+        .find(|model_name| model_pair_exists(model_root, model_name))
+        .map(|model_name| (*model_name).to_string())
+}
+
+fn ensure_realesrgan_model_available(
+    registration: &EngineRegistration,
+    scale: u8,
+) -> AppResult<String> {
+    let model_root = Path::new(&registration.model_path);
+
+    if let Some(model_name) = registration.model_name.as_deref() {
+        let normalized = normalize_realesrgan_model_name(model_name);
+        if is_realesrgan_anime_model_name(normalized)
+            && realesrgan_anime_scale_file_exists(model_root, scale)
+        {
+            return Ok(REALESRGAN_ANIME_MODEL.to_string());
+        }
+
+        if model_pair_exists(model_root, normalized) {
+            return Ok(normalized.to_string());
+        }
+    }
+
+    if realesrgan_anime_scale_file_exists(model_root, scale) {
+        return Ok(REALESRGAN_ANIME_MODEL.to_string());
+    }
+
+    find_realesrgan_fallback_model(model_root)
+        .ok_or_else(|| AppError::Message("Real-ESRGAN のモデルファイルが見つかりません。".into()))
 }
 
 fn infer_registration(engine_id: EngineId, root: &Path) -> AppResult<EngineRegistration> {
     let descriptor = descriptor(engine_id);
-    let executable_path = find_executable(root, descriptor.executable_names)
-        .ok_or_else(|| AppError::Message(format!("{} の実行ファイルが見つかりません。", descriptor.id.label())))?;
+    let executable_path = find_executable(root, descriptor.executable_names).ok_or_else(|| {
+        AppError::Message(format!(
+            "{} の実行ファイルが見つかりません。",
+            descriptor.id.label()
+        ))
+    })?;
 
     let (model_path, model_name) = match engine_id {
+        EngineId::RealCugan => {
+            let model_path =
+                find_directory_named(root, &["models-se", "models-pro", "models-nose"])
+                    .ok_or_else(|| {
+                        AppError::Message("Real-CUGAN のモデルフォルダが見つかりません。".into())
+                    })?;
+            validate_model_directory(&model_path, "Real-CUGAN")?;
+            let model_name = model_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_string());
+
+            (model_path, model_name)
+        }
         EngineId::Waifu2x => {
             let model_path = find_directory_named(
                 root,
-                &["models-cunet", "models-upconv_7_anime_style_art_rgb", "models-upconv_7_photo"],
+                &[
+                    "models-cunet",
+                    "models-upconv_7_anime_style_art_rgb",
+                    "models-upconv_7_photo",
+                ],
             )
-            .ok_or_else(|| AppError::Message("waifu2x のモデルフォルダが見つかりません。".into()))?;
+            .ok_or_else(|| {
+                AppError::Message("waifu2x のモデルフォルダが見つかりません。".into())
+            })?;
+            validate_model_directory(&model_path, "waifu2x")?;
             let model_name = model_path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -158,23 +361,11 @@ fn infer_registration(engine_id: EngineId, root: &Path) -> AppResult<EngineRegis
             (model_path, model_name)
         }
         EngineId::RealEsrgan => {
-            let model_root = find_directory_named(root, &["models"]).unwrap_or_else(|| root.to_path_buf());
-            let preferred_models = [
-                "realesrgan-x4plus-anime",
-                "realesr-animevideov3",
-                "realesr-animevideov3-x2",
-            ];
-
-            let detected_model = preferred_models.iter().find(|name| {
-                model_root.join(format!("{name}.bin")).is_file()
-                    && model_root.join(format!("{name}.param")).is_file()
-            });
-
-            let model_name = detected_model
-                .map(|name| (*name).to_string())
-                .ok_or_else(|| {
-                    AppError::Message("Real-ESRGAN のモデルファイルが見つかりません。".into())
-                })?;
+            let model_root =
+                find_directory_named(root, &["models"]).unwrap_or_else(|| root.to_path_buf());
+            let model_name = find_realesrgan_model(&model_root).ok_or_else(|| {
+                AppError::Message("Real-ESRGAN のモデルファイルが見つかりません。".into())
+            })?;
 
             (model_root, Some(model_name))
         }
@@ -192,12 +383,16 @@ fn infer_registration(engine_id: EngineId, root: &Path) -> AppResult<EngineRegis
 fn run_healthcheck(registration: &EngineRegistration) -> AppResult<()> {
     let executable_path = PathBuf::from(&registration.executable_path);
     if !executable_path.is_file() {
-        return Err(AppError::Message("AI エンジン実行ファイルが存在しません。".into()));
+        return Err(AppError::Message(
+            "AI エンジン実行ファイルが存在しません。".into(),
+        ));
     }
 
     let model_path = PathBuf::from(&registration.model_path);
     if !model_path.exists() {
-        return Err(AppError::Message("AI エンジンのモデルパスが存在しません。".into()));
+        return Err(AppError::Message(
+            "AI エンジンのモデルパスが存在しません。".into(),
+        ));
     }
 
     let output = run_command_with_timeout(
@@ -217,6 +412,119 @@ fn run_healthcheck(registration: &EngineRegistration) -> AppResult<()> {
     }
 
     Ok(())
+}
+
+fn candidate_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    for var_name in ["PRISMPAGE_ENGINE_PATHS", "RAIV_HOME"] {
+        if let Some(value) = env::var_os(var_name) {
+            roots.extend(env::split_paths(&value));
+        }
+    }
+
+    if let Some(home) = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")) {
+        let downloads = PathBuf::from(home).join("Downloads");
+        if downloads.is_dir() {
+            roots.extend(
+                WalkDir::new(&downloads)
+                    .max_depth(3)
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.file_type().is_dir())
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .to_ascii_lowercase()
+                            .contains("raiv")
+                            || entry.path().join("setting.json").is_file()
+                    })
+                    .map(|entry| entry.into_path()),
+            );
+        }
+    }
+
+    for var_name in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
+        if let Some(value) = env::var_os(var_name) {
+            let root = PathBuf::from(value);
+            for candidate in ["RAIV", "Real-CUGAN", "Real-ESRGAN"] {
+                let path = root.join(candidate);
+                if path.is_dir() {
+                    roots.push(path);
+                }
+            }
+        }
+    }
+
+    let mut deduped = Vec::new();
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+
+        let canonical = fs::canonicalize(&root).unwrap_or(root);
+        if !deduped
+            .iter()
+            .any(|existing: &PathBuf| existing == &canonical)
+        {
+            deduped.push(canonical);
+        }
+    }
+
+    deduped.sort_by_key(|root| candidate_root_priority(root));
+    deduped
+}
+
+fn candidate_source(root: &Path) -> String {
+    if root.join("setting.json").is_file() && root.join("tools").is_dir() {
+        "RAIV 検出候補".into()
+    } else {
+        "PC 内の検出候補".into()
+    }
+}
+
+fn source_label(source: &str) -> String {
+    match source {
+        "legacy" => "既存登録".into(),
+        "directory" => "外部フォルダ".into(),
+        "archive" => "ZIP 取込".into(),
+        "manual" => "手動登録".into(),
+        value => value.to_string(),
+    }
+}
+
+pub fn detect_engine_candidates() -> AppResult<Vec<EngineCandidate>> {
+    let mut candidates = Vec::new();
+
+    for root in candidate_roots() {
+        for engine_id in [EngineId::RealCugan, EngineId::RealEsrgan, EngineId::Waifu2x] {
+            let Ok(registration) = infer_registration(engine_id, &root) else {
+                continue;
+            };
+
+            if candidates.iter().any(|candidate: &EngineCandidate| {
+                candidate.id == engine_id
+                    && candidate
+                        .executable_path
+                        .eq_ignore_ascii_case(&registration.executable_path)
+            }) {
+                continue;
+            }
+
+            candidates.push(EngineCandidate {
+                id: engine_id,
+                label: engine_id.label().to_string(),
+                directory_path: root.to_string_lossy().to_string(),
+                executable_path: registration.executable_path,
+                model_path: registration.model_path,
+                model_name: registration.model_name,
+                source: candidate_source(&root),
+            });
+        }
+    }
+
+    Ok(candidates)
 }
 
 fn run_command_with_timeout(
@@ -261,7 +569,11 @@ fn run_command_with_timeout(
         .map(|thread| thread.join().unwrap_or_default())
         .unwrap_or_default();
 
-    Ok(TimedOutput { status, stdout, stderr })
+    Ok(TimedOutput {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn build_status(engine_id: EngineId, registration: Option<&EngineRegistration>) -> EngineStatus {
@@ -287,9 +599,14 @@ fn build_status(engine_id: EngineId, registration: Option<&EngineRegistration>) 
         executable_path: registration.map(|item| item.executable_path.clone()),
         model_path: registration.map(|item| item.model_path.clone()),
         model_name: registration.and_then(|item| item.model_name.clone()),
+        source: registration.map(|item| source_label(&item.source)),
         warning,
         download_url: descriptor.download_url.to_string(),
-        notes: descriptor.notes.iter().map(|note| (*note).to_string()).collect(),
+        notes: descriptor
+            .notes
+            .iter()
+            .map(|note| (*note).to_string())
+            .collect(),
     }
 }
 
@@ -303,7 +620,7 @@ pub fn get_engine_statuses(app: &AppHandle) -> AppResult<Vec<EngineStatus>> {
         load_registry(app)?
     };
 
-    Ok([EngineId::Waifu2x, EngineId::RealEsrgan]
+    Ok(all_engine_ids()
         .into_iter()
         .map(|engine_id| build_status(engine_id, registry.engines.get(&engine_id)))
         .collect())
@@ -319,11 +636,10 @@ pub fn register_engine_directory(
         .0
         .lock()
         .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
-    let root = PathBuf::from(directory_path);
-
-    if !root.is_dir() {
-        return Err(AppError::Message("指定されたフォルダが見つかりません。".into()));
-    }
+    let root = canonicalize_existing_dir(
+        Path::new(directory_path),
+        "指定されたフォルダが見つかりません。",
+    )?;
 
     let mut registry = load_registry(app)?;
     let mut registration = infer_registration(engine_id, &root)?;
@@ -345,32 +661,32 @@ pub fn import_engine_archive(
         .lock()
         .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
     let archive_bytes = fs::read(archive_path)?;
-    let mut archive = ZipArchive::new(Cursor::new(archive_bytes))?;
-    let extraction_root = tools_dir(app, engine_id)?.join(now_unix().to_string());
-    fs::create_dir_all(&extraction_root)?;
-
-    for index in 0..archive.len() {
-        let mut file = archive.by_index(index)?;
-        let enclosed = file
-            .enclosed_name()
-            .ok_or_else(|| AppError::Message("ZIP 内に危険なパスが含まれています。".into()))?;
-
-        let output_path = extraction_root.join(enclosed);
-        if file.is_dir() {
-            fs::create_dir_all(&output_path)?;
-            continue;
-        }
-
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let mut destination = fs::File::create(&output_path)?;
-        std::io::copy(&mut file, &mut destination)?;
-        destination.flush()?;
-    }
+    let extraction_root = create_unique_extraction_root(app, engine_id)?;
 
     let result = (|| -> AppResult<EngineStatus> {
+        let mut archive = ZipArchive::new(Cursor::new(archive_bytes))?;
+
+        for index in 0..archive.len() {
+            let mut file = archive.by_index(index)?;
+            let enclosed = file
+                .enclosed_name()
+                .ok_or_else(|| AppError::Message("ZIP 内に危険なパスが含まれています。".into()))?;
+
+            let output_path = extraction_root.join(enclosed);
+            if file.is_dir() {
+                fs::create_dir_all(&output_path)?;
+                continue;
+            }
+
+            if let Some(parent) = output_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            let mut destination = fs::File::create(&output_path)?;
+            std::io::copy(&mut file, &mut destination)?;
+            destination.flush()?;
+        }
+
         let mut registry = load_registry(app)?;
         let mut registration = infer_registration(engine_id, &extraction_root)?;
         registration.source = "archive".into();
@@ -414,7 +730,10 @@ fn decode_data_url(data_url: &str) -> AppResult<Vec<u8>> {
         .map_err(|error| AppError::Message(format!("画像データの復号に失敗しました: {error}")))
 }
 
-pub fn enhance_image(app: &AppHandle, request: EnhanceImageRequest) -> AppResult<EnhanceImageResponse> {
+pub fn enhance_image(
+    app: &AppHandle,
+    request: EnhanceImageRequest,
+) -> AppResult<EnhanceImageResponse> {
     let registration = {
         let registry_lock = app.state::<RegistryLock>();
         let _guard = registry_lock
@@ -426,7 +745,9 @@ pub fn enhance_image(app: &AppHandle, request: EnhanceImageRequest) -> AppResult
             .engines
             .get(&request.engine_id)
             .cloned()
-            .ok_or_else(|| AppError::Message("選択した AI エンジンはまだ登録されていません。".into()))?
+            .ok_or_else(|| {
+                AppError::Message("選択した AI エンジンはまだ登録されていません。".into())
+            })?
     };
 
     let temp_dir = tempdir()?;
@@ -448,6 +769,23 @@ pub fn enhance_image(app: &AppHandle, request: EnhanceImageRequest) -> AppResult
     let scale = request.scale.to_string();
 
     match request.engine_id {
+        EngineId::RealCugan => {
+            command
+                .arg("-i")
+                .arg(input_path.to_string_lossy().as_ref())
+                .arg("-o")
+                .arg(output_path.to_string_lossy().as_ref())
+                .arg("-s")
+                .arg(&scale)
+                .arg("-n")
+                .arg("0")
+                .arg("-m")
+                .arg(registration.model_path.as_str())
+                .arg("-t")
+                .arg("0")
+                .arg("-f")
+                .arg("png");
+        }
         EngineId::Waifu2x => {
             command
                 .arg("-i")
@@ -464,10 +802,7 @@ pub fn enhance_image(app: &AppHandle, request: EnhanceImageRequest) -> AppResult
                 .arg("png");
         }
         EngineId::RealEsrgan => {
-            let model_name = registration
-                .model_name
-                .as_deref()
-                .unwrap_or("realesrgan-x4plus-anime");
+            let model_name = ensure_realesrgan_model_available(&registration, request.scale)?;
             command
                 .arg("-i")
                 .arg(input_path.to_string_lossy().as_ref())
@@ -506,6 +841,9 @@ pub fn enhance_image(app: &AppHandle, request: EnhanceImageRequest) -> AppResult
 
     let enhanced_bytes = fs::read(output_path)?;
     Ok(EnhanceImageResponse {
-        image_data_url: format!("data:image/png;base64,{}", BASE64_STANDARD.encode(enhanced_bytes)),
+        image_data_url: format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(enhanced_bytes)
+        ),
     })
 }

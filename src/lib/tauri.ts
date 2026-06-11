@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type {
   EnhanceImageRequest,
   EnhanceImageResponse,
+  EngineCandidate,
   EngineId,
   EngineStatus,
   ImportedBook,
@@ -21,6 +22,10 @@ export async function readBookBase64(id: string) {
 
 export async function getEngineStatuses() {
   return invoke<EngineStatus[]>('get_engine_statuses')
+}
+
+export async function detectEngineCandidates() {
+  return invoke<EngineCandidate[]>('detect_engine_candidates')
 }
 
 export async function registerEngineDirectory(engineId: EngineId, directoryPath: string) {

@@ -3,9 +3,14 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+fn default_engine_registration_source() -> String {
+    "legacy".into()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EngineId {
+    RealCugan,
     Waifu2x,
     RealEsrgan,
 }
@@ -13,6 +18,7 @@ pub enum EngineId {
 impl EngineId {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::RealCugan => "real-cugan",
             Self::Waifu2x => "waifu2x",
             Self::RealEsrgan => "real-esrgan",
         }
@@ -20,6 +26,7 @@ impl EngineId {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::RealCugan => "Real-CUGAN-ncnn-vulkan",
             Self::Waifu2x => "waifu2x-ncnn-vulkan",
             Self::RealEsrgan => "Real-ESRGAN-ncnn-vulkan",
         }
@@ -31,6 +38,7 @@ impl FromStr for EngineId {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "real-cugan" => Ok(Self::RealCugan),
             "waifu2x" => Ok(Self::Waifu2x),
             "real-esrgan" => Ok(Self::RealEsrgan),
             _ => Err(format!("未対応の AI エンジンです: {value}")),
@@ -55,6 +63,7 @@ pub struct EngineRegistration {
     pub model_name: Option<String>,
     pub model_path: String,
     pub registered_at: u64,
+    #[serde(default = "default_engine_registration_source")]
     pub source: String,
 }
 
@@ -73,9 +82,22 @@ pub struct EngineStatus {
     pub executable_path: Option<String>,
     pub model_path: Option<String>,
     pub model_name: Option<String>,
+    pub source: Option<String>,
     pub warning: Option<String>,
     pub download_url: String,
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineCandidate {
+    pub id: EngineId,
+    pub label: String,
+    pub directory_path: String,
+    pub executable_path: String,
+    pub model_path: String,
+    pub model_name: Option<String>,
+    pub source: String,
 }
 
 #[derive(Debug, Deserialize)]

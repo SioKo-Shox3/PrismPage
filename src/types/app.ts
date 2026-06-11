@@ -1,4 +1,4 @@
-export type EngineId = 'waifu2x' | 'real-esrgan'
+export type EngineId = 'real-cugan' | 'waifu2x' | 'real-esrgan'
 
 export type ThemeMode = 'dark' | 'light' | 'sepia'
 
@@ -33,9 +33,20 @@ export interface EngineStatus {
   executablePath?: string
   modelPath?: string
   modelName?: string
+  source?: string
   warning?: string
   downloadUrl: string
   notes: string[]
+}
+
+export interface EngineCandidate {
+  id: EngineId
+  label: string
+  directoryPath: string
+  executablePath: string
+  modelPath: string
+  modelName?: string
+  source: string
 }
 
 export interface EnhanceImageRequest {
