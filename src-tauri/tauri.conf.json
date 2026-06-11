@@ -27,8 +27,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
     "copyright": "SioKo-Shox3",
+    "category": "Reference",
+    "shortDescription": "画像重視の EPUB ビューワー",
+    "longDescription": "PrismPage は漫画、画集、スキャン系 EPUB に向けた画像重視のデスクトップ EPUB ビューワーです。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -36,6 +41,27 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "epub"
+        ],
+        "name": "EPUB 電子書籍",
+        "description": "EPUB 電子書籍",
+        "mimeType": "application/epub+zip",
+        "role": "Viewer"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "Japanese",
+          "English"
+        ],
+        "installerIcon": "icons/icon.ico"
+      }
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
