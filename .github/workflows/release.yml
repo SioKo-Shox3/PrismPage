@@ -1,0 +1,72 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  windows-installer:
+    name: Build Windows NSIS installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        if: github.ref_type == 'tag'
+        run: |
+          $config = Get-Content -Raw src-tauri\tauri.conf.json | ConvertFrom-Json
+          $expectedTag = "app-v$($config.version)"
+          $actualTag = "${{ github.ref_name }}"
+
+          if ($actualTag -ne $expectedTag) {
+            throw "Release tag must match src-tauri/tauri.conf.json version. Expected '$expectedTag', got '$actualTag'."
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: node "$env:ProgramFiles\nodejs\node_modules\npm\bin\npm-cli.js" ci
+
+      - name: Lint
+        run: node "$env:ProgramFiles\nodejs\node_modules\npm\bin\npm-cli.js" run lint
+
+      - name: Check Rust
+        run: cargo check --manifest-path src-tauri\Cargo.toml
+
+      - name: Build and upload Windows installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-v__VERSION__' }}
+          releaseName: PrismPage v__VERSION__
+          releaseBody: |
+            PrismPage beta 版の Windows インストーラです。
+
+            インストール後、Windows の「既定のアプリ」または「プログラムから開く」から `.epub` を PrismPage に関連付けできます。
+          releaseDraft: true
+          prerelease: true
+          args: --target x86_64-pc-windows-msvc
