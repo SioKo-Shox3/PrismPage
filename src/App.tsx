@@ -6,6 +6,7 @@ import { BookOpenText, ImageUpscale, Library, Settings2 } from 'lucide-react'
 import { useLibraryStore } from '@/features/library/book-store'
 import { useSettingsStore } from '@/features/settings/settings-store'
 import { extractEpubPreview } from '@/lib/epub'
+import { getEngineLabel } from '@/lib/engines'
 import {
   importEpubFromPath,
   isTauriRuntime,
@@ -217,7 +218,7 @@ function App() {
             <h2>AI 優先エンジン</h2>
           </div>
           <p className="status-card-value">
-            {preferredEngine === 'waifu2x' ? 'waifu2x' : 'Real-ESRGAN'}
+            {getEngineLabel(preferredEngine)}
           </p>
           <p className="muted">設定画面からエンジン切り替えと導入支援を行えます。</p>
         </section>

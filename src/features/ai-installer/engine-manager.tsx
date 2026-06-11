@@ -1,22 +1,43 @@
 import { useEffect, useMemo, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { AlertCircle, CheckCircle2, FolderSearch, PackagePlus, RefreshCw } from 'lucide-react'
+import {
+  AlertCircle,
+  CheckCircle2,
+  FolderSearch,
+  HardDrive,
+  PackagePlus,
+  RefreshCw,
+  Search,
+} from 'lucide-react'
 
 import {
   clearEngineRegistration,
+  detectEngineCandidates,
   getEngineStatuses,
   importEngineArchive,
+  isTauriRuntime,
   registerEngineDirectory,
 } from '@/lib/tauri'
-import type { EngineId, EngineStatus } from '@/types/app'
+import { engineOptions, getEngineDescription, getEngineLabel } from '@/lib/engines'
+import type { EngineCandidate, EngineId, EngineStatus } from '@/types/app'
 
 interface EngineManagerProps {
   preferredEngine: EngineId
   onPreferredEngineChange: (engineId: EngineId) => void
 }
 
-const engineOrder: EngineId[] = ['waifu2x', 'real-esrgan']
+const engineOrder: EngineId[] = engineOptions.map((engine) => engine.id)
+const tauriUnavailableMessage =
+  'AI エンジンの検索・登録は Tauri アプリとして起動したときに利用できます。'
+
+function upsertEngineStatus(statuses: EngineStatus[], status: EngineStatus) {
+  if (statuses.some((entry) => entry.id === status.id)) {
+    return statuses.map((entry) => (entry.id === status.id ? status : entry))
+  }
+
+  return [...statuses, status]
+}
 
 export function EngineManager({
   preferredEngine,
@@ -24,11 +45,29 @@ export function EngineManager({
 }: EngineManagerProps) {
   const [statuses, setStatuses] = useState<EngineStatus[]>([])
   const [busyEngine, setBusyEngine] = useState<EngineId | null>(null)
+  const [candidates, setCandidates] = useState<EngineCandidate[]>([])
+  const [isDetecting, setIsDetecting] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  function ensureTauriRuntime() {
+    if (isTauriRuntime) {
+      return true
+    }
+
+    setMessage(null)
+    setError(tauriUnavailableMessage)
+    return false
+  }
+
   async function refreshStatuses() {
+    if (!ensureTauriRuntime()) {
+      setStatuses([])
+      return
+    }
+
     try {
+      setMessage(null)
       setError(null)
       setStatuses(await getEngineStatuses())
     } catch (refreshError) {
@@ -44,6 +83,13 @@ export function EngineManager({
     let cancelled = false
 
     void (async () => {
+      if (!isTauriRuntime) {
+        if (!cancelled) {
+          setError(tauriUnavailableMessage)
+        }
+        return
+      }
+
       try {
         const nextStatuses = await getEngineStatuses()
         if (!cancelled) {
@@ -75,11 +121,26 @@ export function EngineManager({
   )
 
   async function handleDirectoryImport(engineId: EngineId) {
-    const selectedPath = await open({
-      directory: true,
-      multiple: false,
-      title: 'AI エンジンの展開済みフォルダを選択',
-    })
+    if (!ensureTauriRuntime()) {
+      return
+    }
+
+    let selectedPath: string | string[] | null
+
+    try {
+      selectedPath = await open({
+        directory: true,
+        multiple: false,
+        title: 'PC 上の AI エンジンまたは RAIV フォルダを選択',
+      })
+    } catch (dialogError) {
+      setError(
+        dialogError instanceof Error
+          ? dialogError.message
+          : 'フォルダ選択ダイアログを開けませんでした。',
+      )
+      return
+    }
 
     if (typeof selectedPath !== 'string') {
       return
@@ -90,10 +151,8 @@ export function EngineManager({
       setMessage(null)
       setError(null)
       const status = await registerEngineDirectory(engineId, selectedPath)
-      setStatuses((current) =>
-        current.map((entry) => (entry.id === status.id ? status : entry)),
-      )
-      setMessage(`${status.label} のフォルダ登録が完了しました。`)
+      setStatuses((current) => upsertEngineStatus(current, status))
+      setMessage(`${getEngineLabel(status.id)} の外部フォルダ登録が完了しました。`)
     } catch (registerError) {
       setError(
         registerError instanceof Error
@@ -105,13 +164,79 @@ export function EngineManager({
     }
   }
 
+  async function handleDetectCandidates() {
+    if (!ensureTauriRuntime()) {
+      return
+    }
+
+    try {
+      setIsDetecting(true)
+      setMessage(null)
+      setError(null)
+      const nextCandidates = await detectEngineCandidates()
+      setCandidates(nextCandidates)
+      setMessage(
+        nextCandidates.length > 0
+          ? `${nextCandidates.length} 件の AI エンジン候補を見つけました。`
+          : 'PC 内の既定候補から AI エンジンは見つかりませんでした。RAIV フォルダを手動指定してください。',
+      )
+    } catch (detectError) {
+      setError(
+        detectError instanceof Error
+          ? detectError.message
+          : 'AI エンジン候補の検索に失敗しました。',
+      )
+    } finally {
+      setIsDetecting(false)
+    }
+  }
+
+  async function handleCandidateRegister(candidate: EngineCandidate) {
+    if (!ensureTauriRuntime()) {
+      return
+    }
+
+    try {
+      setBusyEngine(candidate.id)
+      setMessage(null)
+      setError(null)
+      const status = await registerEngineDirectory(candidate.id, candidate.directoryPath)
+      setStatuses((current) => upsertEngineStatus(current, status))
+      onPreferredEngineChange(status.id)
+      setMessage(`${getEngineLabel(status.id)} を PC 上の既存フォルダ参照として登録しました。`)
+    } catch (registerError) {
+      setError(
+        registerError instanceof Error
+          ? registerError.message
+          : '検出候補の登録に失敗しました。',
+      )
+    } finally {
+      setBusyEngine(null)
+    }
+  }
+
   async function handleArchiveImport(engineId: EngineId) {
-    const selectedPath = await open({
-      directory: false,
-      filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
-      multiple: false,
-      title: 'AI エンジンの ZIP アーカイブを選択',
-    })
+    if (!ensureTauriRuntime()) {
+      return
+    }
+
+    let selectedPath: string | string[] | null
+
+    try {
+      selectedPath = await open({
+        directory: false,
+        filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
+        multiple: false,
+        title: 'AI エンジンの ZIP アーカイブを選択',
+      })
+    } catch (dialogError) {
+      setError(
+        dialogError instanceof Error
+          ? dialogError.message
+          : 'ZIP 選択ダイアログを開けませんでした。',
+      )
+      return
+    }
 
     if (typeof selectedPath !== 'string') {
       return
@@ -122,10 +247,8 @@ export function EngineManager({
       setMessage(null)
       setError(null)
       const status = await importEngineArchive(engineId, selectedPath)
-      setStatuses((current) =>
-        current.map((entry) => (entry.id === status.id ? status : entry)),
-      )
-      setMessage(`${status.label} の ZIP インポートが完了しました。`)
+      setStatuses((current) => upsertEngineStatus(current, status))
+      setMessage(`${getEngineLabel(status.id)} の ZIP 取込が完了しました。`)
     } catch (archiveError) {
       setError(
         archiveError instanceof Error
@@ -138,6 +261,10 @@ export function EngineManager({
   }
 
   async function handleClear(engineId: EngineId) {
+    if (!ensureTauriRuntime()) {
+      return
+    }
+
     try {
       setBusyEngine(engineId)
       setMessage(null)
@@ -156,6 +283,19 @@ export function EngineManager({
     }
   }
 
+  async function handleOpenDownloadUrl(url: string) {
+    if (!isTauriRuntime) {
+      window.open(url, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    try {
+      await openUrl(url)
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  }
+
   return (
     <section className="panel">
       <div className="section-header">
@@ -163,13 +303,22 @@ export function EngineManager({
         <div>
           <h2>AI エンジン管理</h2>
           <p>
-            waifu2x と Real-ESRGAN のどちらも登録可能です。ZIP を直接取り込むか、
-            展開済みフォルダを指定してください。
+            PC 上にある RAIV / Real-CUGAN / waifu2x / Real-ESRGAN を登録して使います。
+            モデルはアプリ内へコピーせず、既存フォルダを参照します。
           </p>
         </div>
       </div>
 
       <div className="inline-actions">
+        <button
+          type="button"
+          className="button"
+          onClick={() => void handleDetectCandidates()}
+          disabled={isDetecting}
+        >
+          <Search size={16} />
+          {isDetecting ? '検索中...' : 'PC 内の候補を検索'}
+        </button>
         <button type="button" className="ghost-button" onClick={() => void refreshStatuses()}>
           <RefreshCw size={16} />
           状態を再読込
@@ -178,6 +327,47 @@ export function EngineManager({
 
       {message ? <div className="message-strip is-success">{message}</div> : null}
       {error ? <div className="message-strip is-error">{error}</div> : null}
+
+      {candidates.length > 0 ? (
+        <div className="candidate-list">
+          {candidates.map((candidate) => (
+            <article
+              key={`${candidate.id}-${candidate.executablePath}`}
+              className="candidate-card"
+            >
+              <div className="engine-card-header">
+                <HardDrive size={18} />
+                <div>
+                  <h3>{getEngineLabel(candidate.id)}</h3>
+                  <p>{candidate.source}</p>
+                </div>
+              </div>
+
+              <div className="field-stack">
+                <span className="helper-text">候補フォルダ</span>
+                <code>{candidate.directoryPath}</code>
+                <span className="helper-text">実行ファイル</span>
+                <code>{candidate.executablePath}</code>
+                <span className="helper-text">モデル</span>
+                <code>
+                  {candidate.modelName
+                    ? `${candidate.modelName} / ${candidate.modelPath}`
+                    : candidate.modelPath}
+                </code>
+              </div>
+
+              <button
+                type="button"
+                className="button"
+                onClick={() => void handleCandidateRegister(candidate)}
+                disabled={busyEngine === candidate.id}
+              >
+                この候補を登録
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : null}
 
       <div className="engine-grid">
         {orderedStatuses.map((status) => {
@@ -192,8 +382,8 @@ export function EngineManager({
                   <AlertCircle size={18} className="text-amber-300" />
                 )}
                 <div>
-                  <h3>{status.label}</h3>
-                  <p>{status.id === 'waifu2x' ? '漫画・線画向け' : '表紙・挿絵混在向け'}</p>
+                  <h3>{getEngineLabel(status.id)}</h3>
+                  <p>{getEngineDescription(status.id)}</p>
                 </div>
               </div>
 
@@ -216,6 +406,7 @@ export function EngineManager({
                 <span className="chip">
                   {preferredEngine === status.id ? '優先エンジン' : '任意選択'}
                 </span>
+                {status.source ? <span className="chip">{status.source}</span> : null}
               </div>
 
               <div className="field-stack">
@@ -249,7 +440,7 @@ export function EngineManager({
                   disabled={isBusy}
                 >
                   <PackagePlus size={16} />
-                  ZIP を取り込む
+                  ZIP 取込（互換）
                 </button>
                 <button
                   type="button"
@@ -258,12 +449,12 @@ export function EngineManager({
                   disabled={isBusy}
                 >
                   <FolderSearch size={16} />
-                  フォルダを指定
+                  PC 上のフォルダを指定
                 </button>
                 <button
                   type="button"
                   className="ghost-button"
-                  onClick={() => void openUrl(status.downloadUrl)}
+                  onClick={() => void handleOpenDownloadUrl(status.downloadUrl)}
                 >
                   公式配布ページ
                 </button>

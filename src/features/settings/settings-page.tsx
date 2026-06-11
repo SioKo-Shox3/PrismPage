@@ -2,6 +2,7 @@ import { Settings2, Sparkles } from 'lucide-react'
 
 import { EngineManager } from '@/features/ai-installer/engine-manager'
 import { useSettingsStore } from '@/features/settings/settings-store'
+import { engineOptions } from '@/lib/engines'
 
 export function SettingsPage() {
   const {
@@ -159,22 +160,17 @@ export function SettingsPage() {
             </div>
 
             <div className="segmented-control">
-              <button
-                type="button"
-                className="segmented-button"
-                onClick={() => setPreferredEngine('waifu2x')}
-                disabled={preferredEngine === 'waifu2x'}
-              >
-                waifu2x
-              </button>
-              <button
-                type="button"
-                className="segmented-button"
-                onClick={() => setPreferredEngine('real-esrgan')}
-                disabled={preferredEngine === 'real-esrgan'}
-              >
-                Real-ESRGAN
-              </button>
+              {engineOptions.map((engine) => (
+                <button
+                  key={engine.id}
+                  type="button"
+                  className="segmented-button"
+                  onClick={() => setPreferredEngine(engine.id)}
+                  disabled={preferredEngine === engine.id}
+                >
+                  {engine.label}
+                </button>
+              ))}
             </div>
           </article>
         </div>

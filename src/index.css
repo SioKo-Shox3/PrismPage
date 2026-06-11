@@ -319,6 +319,7 @@ img {
 }
 
 .info-list,
+.candidate-list,
 .settings-grid,
 .engine-grid,
 .book-grid,
@@ -334,6 +335,10 @@ img {
 .settings-grid,
 .engine-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.candidate-list {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .book-grid {
@@ -487,7 +492,8 @@ img {
 }
 
 .setting-item,
-.engine-card {
+.engine-card,
+.candidate-card {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -495,6 +501,12 @@ img {
   border-radius: 24px;
   border: 1px solid var(--border);
   background: var(--bg-soft);
+}
+
+.candidate-card code,
+.engine-card code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .setting-item input[type='range'] {
@@ -677,6 +689,7 @@ img {
 
   .info-list,
   .hero-grid,
+  .candidate-list,
   .settings-grid,
   .engine-grid,
   .form-grid {

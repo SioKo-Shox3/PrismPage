@@ -14,6 +14,7 @@ import {
 import { useLibraryStore } from '@/features/library/book-store'
 import { useSettingsStore } from '@/features/settings/settings-store'
 import { base64ToArrayBuffer, flattenNavigation } from '@/lib/epub'
+import { getEngineLabel } from '@/lib/engines'
 import { enhanceImage, getEngineStatuses, readBookBase64 } from '@/lib/tauri'
 import type { EngineStatus } from '@/types/app'
 
@@ -332,9 +333,7 @@ export function ReaderPage() {
               >
                 {currentEngineStatus?.ready ? '利用可能' : '準備が必要'}
               </span>
-              <span className="chip">
-                {preferredEngine === 'waifu2x' ? 'waifu2x' : 'Real-ESRGAN'}
-              </span>
+              <span className="chip">{getEngineLabel(preferredEngine)}</span>
             </div>
           </section>
 
@@ -443,14 +442,12 @@ export function ReaderPage() {
                   <span className="chip">
                     表示中 {zoomedImage.enhancedDataUrl ? 'AI 強調後' : '元画像'}
                   </span>
-                  <span className="chip">
-                    エンジン {preferredEngine === 'waifu2x' ? 'waifu2x' : 'Real-ESRGAN'}
-                  </span>
+                  <span className="chip">エンジン {getEngineLabel(preferredEngine)}</span>
                 </div>
 
                 {!currentEngineStatus?.ready ? (
                   <div className="message-strip is-error">
-                    AI エンジンがまだ利用可能ではありません。設定画面から ZIP または展開済み
+                    AI エンジンがまだ利用可能ではありません。設定画面から PC 上の既存エンジン
                     フォルダを登録してください。
                   </div>
                 ) : null}
