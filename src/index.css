@@ -491,6 +491,51 @@ img {
   align-items: start;
 }
 
+.update-checker {
+  display: grid;
+  gap: 18px;
+}
+
+.update-checker-body {
+  display: grid;
+  gap: 14px;
+}
+
+.update-checker-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.update-checker-meta > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.update-checker-meta strong {
+  overflow-wrap: anywhere;
+  font-size: 1.2rem;
+}
+
+.installer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.installer-list .ghost-button {
+  max-width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.installer-list .ghost-button span {
+  overflow-wrap: anywhere;
+}
+
 .setting-item,
 .engine-card,
 .candidate-card {
@@ -691,6 +736,7 @@ img {
   .hero-grid,
   .candidate-list,
   .settings-grid,
+  .update-checker-meta,
   .engine-grid,
   .form-grid {
     grid-template-columns: 1fr;

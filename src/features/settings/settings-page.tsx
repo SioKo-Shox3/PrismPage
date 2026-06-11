@@ -2,6 +2,7 @@ import { Settings2, Sparkles } from 'lucide-react'
 
 import { EngineManager } from '@/features/ai-installer/engine-manager'
 import { useSettingsStore } from '@/features/settings/settings-store'
+import { UpdateChecker } from '@/features/settings/update-checker'
 import { engineOptions } from '@/lib/engines'
 
 export function SettingsPage() {
@@ -175,6 +176,8 @@ export function SettingsPage() {
           </article>
         </div>
       </section>
+
+      <UpdateChecker />
 
       <EngineManager
         preferredEngine={preferredEngine}
