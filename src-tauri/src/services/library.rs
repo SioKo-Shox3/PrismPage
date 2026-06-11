@@ -22,6 +22,16 @@ pub fn import_epub_from_path(app: &AppHandle, path: &str) -> AppResult<ImportedB
         return Err(AppError::Message("選択した EPUB ファイルが見つかりません。".into()));
     }
 
+    let source_path = fs::canonicalize(&source_path)?;
+
+    if !source_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("epub"))
+    {
+        return Err(AppError::Message("EPUB ファイルだけを取り込めます。".into()));
+    }
+
     let file_name = source_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -37,6 +47,7 @@ pub fn import_epub_from_path(app: &AppHandle, path: &str) -> AppResult<ImportedB
     Ok(ImportedBook {
         id,
         file_name,
+        source_path: source_path.to_string_lossy().to_string(),
         stored_path: destination_path.to_string_lossy().to_string(),
         size,
     })

@@ -5,6 +5,7 @@ export type ThemeMode = 'dark' | 'light' | 'sepia'
 export interface BookRecord {
   id: string
   fileName: string
+  sourcePath?: string
   storedPath: string
   size: number
   importedAt: number
@@ -19,6 +20,7 @@ export interface BookRecord {
 export interface ImportedBook {
   id: string
   fileName: string
+  sourcePath: string
   storedPath: string
   size: number
 }

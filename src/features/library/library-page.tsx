@@ -7,6 +7,10 @@ import { useLibraryStore } from '@/features/library/book-store'
 import { extractEpubPreview } from '@/lib/epub'
 import { importEpubFromPath, readBookBase64 } from '@/lib/tauri'
 
+function getPathKey(path: string) {
+  return path.trim().replace(/\//g, '\\').toLowerCase()
+}
+
 export function LibraryPage() {
   const books = useLibraryStore((state) => state.books)
   const upsertBook = useLibraryStore((state) => state.upsertBook)
@@ -38,7 +42,27 @@ export function LibraryPage() {
       setIsImporting(true)
       setError(null)
 
+      const selectedPathKey = getPathKey(selectedPath)
+      const existingBook = useLibraryStore
+        .getState()
+        .books.find((book) => book.sourcePath && getPathKey(book.sourcePath) === selectedPathKey)
+
+      if (existingBook) {
+        setError(`既に取り込み済みの EPUB です: ${existingBook.title}`)
+        return
+      }
+
       const imported = await importEpubFromPath(selectedPath)
+      const importedPathKey = getPathKey(imported.sourcePath)
+      const duplicateBook = useLibraryStore
+        .getState()
+        .books.find((book) => book.sourcePath && getPathKey(book.sourcePath) === importedPathKey)
+
+      if (duplicateBook) {
+        setError(`既に取り込み済みの EPUB です: ${duplicateBook.title}`)
+        return
+      }
+
       const base64 = await readBookBase64(imported.id)
       const preview = await extractEpubPreview(base64)
 
@@ -49,6 +73,7 @@ export function LibraryPage() {
         id: imported.id,
         importedAt: Date.now(),
         size: imported.size,
+        sourcePath: imported.sourcePath,
         storedPath: imported.storedPath,
         title: preview.title || imported.fileName.replace(/\.epub$/i, ''),
       })

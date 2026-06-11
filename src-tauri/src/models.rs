@@ -43,6 +43,7 @@ impl FromStr for EngineId {
 pub struct ImportedBook {
     pub id: String,
     pub file_name: String,
+    pub source_path: String,
     pub stored_path: String,
     pub size: u64,
 }

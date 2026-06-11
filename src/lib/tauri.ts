@@ -38,3 +38,7 @@ export async function clearEngineRegistration(engineId: EngineId) {
 export async function enhanceImage(request: EnhanceImageRequest) {
   return invoke<EnhanceImageResponse>('enhance_image', { request })
 }
+
+export async function takePendingOpenedEpubs() {
+  return invoke<string[]>('take_pending_opened_epubs')
+}
