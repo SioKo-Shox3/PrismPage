@@ -100,6 +100,33 @@ pub struct EngineCandidate {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineInstallOption {
+    pub engine_id: EngineId,
+    pub label: String,
+    pub release_name: String,
+    pub release_tag: String,
+    pub asset_name: String,
+    pub download_url: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineInstallWarning {
+    pub engine_id: EngineId,
+    pub label: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineInstallOptionsResponse {
+    pub options: Vec<EngineInstallOption>,
+    pub warnings: Vec<EngineInstallWarning>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnhanceImageRequest {

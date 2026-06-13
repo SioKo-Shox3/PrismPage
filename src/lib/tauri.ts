@@ -5,6 +5,8 @@ import type {
   EnhanceImageResponse,
   EngineCandidate,
   EngineId,
+  EngineInstallOption,
+  EngineInstallOptionsResponse,
   EngineStatus,
   ImportedBook,
 } from '@/types/app'
@@ -28,12 +30,20 @@ export async function detectEngineCandidates() {
   return invoke<EngineCandidate[]>('detect_engine_candidates')
 }
 
+export async function getEngineInstallOptions() {
+  return invoke<EngineInstallOptionsResponse>('get_engine_install_options')
+}
+
 export async function registerEngineDirectory(engineId: EngineId, directoryPath: string) {
   return invoke<EngineStatus>('register_engine_directory', { engineId, directoryPath })
 }
 
 export async function importEngineArchive(engineId: EngineId, archivePath: string) {
   return invoke<EngineStatus>('import_engine_archive', { engineId, archivePath })
+}
+
+export async function installEngineFromRelease(option: EngineInstallOption) {
+  return invoke<EngineStatus>('install_engine_from_release', { option })
 }
 
 export async function clearEngineRegistration(engineId: EngineId) {

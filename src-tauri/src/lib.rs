@@ -111,8 +111,10 @@ pub fn run() {
             commands::library::take_pending_opened_epubs,
             commands::engines::get_engine_statuses,
             commands::engines::detect_engine_candidates,
+            commands::engines::get_engine_install_options,
             commands::engines::register_engine_directory,
             commands::engines::import_engine_archive,
+            commands::engines::install_engine_from_release,
             commands::engines::clear_engine_registration,
             commands::engines::enhance_image,
         ])

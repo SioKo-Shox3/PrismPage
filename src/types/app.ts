@@ -49,6 +49,27 @@ export interface EngineCandidate {
   source: string
 }
 
+export interface EngineInstallOption {
+  engineId: EngineId
+  label: string
+  releaseName: string
+  releaseTag: string
+  assetName: string
+  downloadUrl: string
+  size: number
+}
+
+export interface EngineInstallWarning {
+  engineId: EngineId
+  label: string
+  message: string
+}
+
+export interface EngineInstallOptionsResponse {
+  options: EngineInstallOption[]
+  warnings: EngineInstallWarning[]
+}
+
 export interface EnhanceImageRequest {
   engineId: EngineId
   imageDataUrl: string

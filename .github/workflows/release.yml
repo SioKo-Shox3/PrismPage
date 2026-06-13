@@ -64,9 +64,10 @@ jobs:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-v__VERSION__' }}
           releaseName: PrismPage v__VERSION__
           releaseBody: |
-            PrismPage beta 版の Windows インストーラです。
+            PrismPage beta / prerelease 版の Windows インストーラです。
+            公開後は、アプリ内の更新確認にも表示されます。
 
             インストール後、Windows の「既定のアプリ」または「プログラムから開く」から `.epub` を PrismPage に関連付けできます。
-          releaseDraft: true
+          releaseDraft: false
           prerelease: true
           args: --target x86_64-pc-windows-msvc

@@ -1,4 +1,4 @@
-use std::io::{Cursor, ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
@@ -6,6 +6,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
 use base64::prelude::{Engine, BASE64_STANDARD};
+use reqwest::blocking::Client;
+use reqwest::{StatusCode, Url};
+use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -15,8 +18,9 @@ use zip::ZipArchive;
 
 use crate::app_error::{AppError, AppResult};
 use crate::models::{
-    EngineCandidate, EngineId, EngineRegistration, EngineRegistry, EngineStatus,
-    EnhanceImageRequest, EnhanceImageResponse,
+    EngineCandidate, EngineId, EngineInstallOption, EngineInstallOptionsResponse,
+    EngineInstallWarning, EngineRegistration, EngineRegistry, EngineStatus, EnhanceImageRequest,
+    EnhanceImageResponse,
 };
 use crate::services::app_data_dir;
 use crate::state::RegistryLock;
@@ -34,6 +38,27 @@ struct EngineDescriptor {
     notes: &'static [&'static str],
 }
 
+struct ReleaseDescriptor {
+    owner: &'static str,
+    repo: &'static str,
+    asset_keywords: &'static [&'static str],
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    name: Option<String>,
+    draft: bool,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubAsset {
+    name: String,
+    size: u64,
+    browser_download_url: String,
+}
+
 const REALESRGAN_ANIME_MODEL: &str = "realesr-animevideov3";
 const REALESRGAN_ANIME_SCALE_MODELS: [&str; 3] = [
     "realesr-animevideov3-x2",
@@ -41,6 +66,7 @@ const REALESRGAN_ANIME_SCALE_MODELS: [&str; 3] = [
     "realesr-animevideov3-x4",
 ];
 const REALESRGAN_FALLBACK_MODELS: [&str; 2] = ["realesrgan-x4plus-anime", "realesrgan-x4plus"];
+const MAX_RELEASE_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 fn descriptor(engine_id: EngineId) -> EngineDescriptor {
     match engine_id {
@@ -54,7 +80,7 @@ fn descriptor(engine_id: EngineId) -> EngineDescriptor {
                 "realcugan-ncnn-vulkan",
             ],
             notes: &[
-                "RAIV 同梱版の Real-CUGAN を直接登録できます。",
+                "公式配布 ZIP をアプリ内へインストールできます。",
                 "漫画・イラストの拡大では `models-se` を優先利用します。",
             ],
         },
@@ -85,6 +111,26 @@ fn descriptor(engine_id: EngineId) -> EngineDescriptor {
                 "ZIP 取込時はアニメ向けモデルがあればそれを優先します。",
                 "表紙・挿絵・写真混在 EPUB に向いています。",
             ],
+        },
+    }
+}
+
+fn release_descriptor(engine_id: EngineId) -> ReleaseDescriptor {
+    match engine_id {
+        EngineId::RealCugan => ReleaseDescriptor {
+            owner: "nihui",
+            repo: "realcugan-ncnn-vulkan",
+            asset_keywords: &["realcugan-ncnn-vulkan"],
+        },
+        EngineId::Waifu2x => ReleaseDescriptor {
+            owner: "nihui",
+            repo: "waifu2x-ncnn-vulkan",
+            asset_keywords: &["waifu2x-ncnn-vulkan"],
+        },
+        EngineId::RealEsrgan => ReleaseDescriptor {
+            owner: "xinntao",
+            repo: "Real-ESRGAN",
+            asset_keywords: &["realesrgan-ncnn-vulkan"],
         },
     }
 }
@@ -144,6 +190,313 @@ fn now_unix() -> u64 {
 
 fn all_engine_ids() -> [EngineId; 3] {
     [EngineId::RealCugan, EngineId::Waifu2x, EngineId::RealEsrgan]
+}
+
+fn github_client(timeout: Duration) -> AppResult<Client> {
+    Ok(Client::builder()
+        .timeout(timeout)
+        .user_agent("PrismPage")
+        .build()?)
+}
+
+fn github_releases_api_url(descriptor: &ReleaseDescriptor) -> String {
+    format!(
+        "https://api.github.com/repos/{}/{}/releases?per_page=30",
+        descriptor.owner, descriptor.repo
+    )
+}
+
+fn ensure_success_status(status: StatusCode, context: &str) -> AppResult<()> {
+    if status.is_success() {
+        return Ok(());
+    }
+
+    Err(AppError::Message(format!(
+        "{context} がエラーを返しました。（HTTP {status}）"
+    )))
+}
+
+fn fetch_releases(
+    client: &Client,
+    descriptor: &ReleaseDescriptor,
+) -> AppResult<Vec<GitHubRelease>> {
+    let url = github_releases_api_url(descriptor);
+    let response = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .map_err(|error| {
+            AppError::Message(format!(
+                "GitHub Releases API への接続に失敗しました: {error}"
+            ))
+        })?;
+
+    let status = response.status();
+    ensure_success_status(status, "GitHub Releases API")?;
+
+    response.json::<Vec<GitHubRelease>>().map_err(|error| {
+        AppError::Message(format!(
+            "GitHub Releases API の応答を読み取れませんでした: {error}"
+        ))
+    })
+}
+
+fn is_windows_zip_asset(asset_name: &str, keywords: &[&str]) -> bool {
+    let lower_name = asset_name.to_ascii_lowercase();
+    lower_name.ends_with(".zip")
+        && (lower_name.contains("windows")
+            || lower_name.contains("win64")
+            || lower_name.contains("win32"))
+        && keywords
+            .iter()
+            .all(|keyword| lower_name.contains(&keyword.to_ascii_lowercase()))
+}
+
+fn release_asset_option(
+    engine_id: EngineId,
+    release: &GitHubRelease,
+    asset: &GitHubAsset,
+) -> EngineInstallOption {
+    EngineInstallOption {
+        engine_id,
+        label: engine_id.label().to_string(),
+        release_name: release
+            .name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(&release.tag_name)
+            .to_string(),
+        release_tag: release.tag_name.clone(),
+        asset_name: asset.name.clone(),
+        download_url: asset.browser_download_url.clone(),
+        size: asset.size,
+    }
+}
+
+fn windows_asset_priority(asset_name: &str) -> u8 {
+    let lower_name = asset_name.to_ascii_lowercase();
+
+    if lower_name.contains("win64") || lower_name.contains("x64") {
+        0
+    } else if lower_name.contains("windows") {
+        1
+    } else if lower_name.contains("win32") || lower_name.contains("x86") {
+        2
+    } else {
+        3
+    }
+}
+
+fn find_release_assets(
+    client: &Client,
+    engine_id: EngineId,
+) -> AppResult<Vec<EngineInstallOption>> {
+    let descriptor = release_descriptor(engine_id);
+    let releases = fetch_releases(client, &descriptor)?;
+    let mut options = Vec::new();
+
+    for release in releases.iter().filter(|release| !release.draft) {
+        let mut assets = release
+            .assets
+            .iter()
+            .filter(|asset| {
+                is_windows_zip_asset(&asset.name, descriptor.asset_keywords)
+                    && asset.size > 0
+                    && asset.size <= MAX_RELEASE_ARCHIVE_BYTES
+            })
+            .collect::<Vec<_>>();
+        assets.sort_by_key(|asset| windows_asset_priority(&asset.name));
+
+        for asset in assets {
+            options.push(release_asset_option(engine_id, release, asset));
+        }
+    }
+
+    if options.is_empty() {
+        Err(AppError::Message(format!(
+            "{} のインストール可能な Windows ZIP 配布 asset が見つかりませんでした。",
+            engine_id.label()
+        )))
+    } else {
+        Ok(options)
+    }
+}
+
+fn validate_release_option(option: &EngineInstallOption) -> AppResult<()> {
+    let descriptor = release_descriptor(option.engine_id);
+    let engine_label = option.engine_id.label();
+
+    if !is_windows_zip_asset(&option.asset_name, descriptor.asset_keywords) {
+        return Err(AppError::Message(format!(
+            "{} の Windows ZIP asset として扱えないファイル名です。",
+            engine_label
+        )));
+    }
+
+    let url = Url::parse(&option.download_url).map_err(|error| {
+        AppError::Message(format!(
+            "公式配布 ZIP の URL を読み取れませんでした: {error}"
+        ))
+    })?;
+
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        return Err(AppError::Message(
+            "公式配布 ZIP は GitHub の HTTPS URL を指定してください。".into(),
+        ));
+    }
+
+    let path = url.path().to_ascii_lowercase();
+    let expected_prefix = format!(
+        "/{}/{}/releases/download/",
+        descriptor.owner.to_ascii_lowercase(),
+        descriptor.repo.to_ascii_lowercase()
+    );
+
+    if !path.starts_with(&expected_prefix) || !path.ends_with(".zip") {
+        return Err(AppError::Message(format!(
+            "{} の公式 GitHub Releases asset URL ではありません。",
+            engine_label
+        )));
+    }
+
+    Ok(())
+}
+
+fn ensure_release_archive_size(engine_label: &str, size: u64) -> AppResult<()> {
+    if size == 0 {
+        return Err(AppError::Message(format!(
+            "{engine_label} の公式配布 ZIP はサイズ情報が 0 bytes のためインストールできません。"
+        )));
+    }
+
+    if size > MAX_RELEASE_ARCHIVE_BYTES {
+        return Err(AppError::Message(format!(
+            "{engine_label} の公式配布 ZIP は上限サイズ 1GB を超えています。（{} bytes）",
+            size
+        )));
+    }
+
+    Ok(())
+}
+
+fn verify_release_option(
+    client: &Client,
+    option: &EngineInstallOption,
+) -> AppResult<EngineInstallOption> {
+    validate_release_option(option)?;
+
+    let descriptor = release_descriptor(option.engine_id);
+    let releases = fetch_releases(client, &descriptor)?;
+    let release = releases
+        .iter()
+        .find(|release| !release.draft && release.tag_name == option.release_tag)
+        .ok_or_else(|| {
+            AppError::Message(format!(
+                "{} の指定リリースが公式 GitHub Releases API で確認できませんでした。",
+                option.engine_id.label()
+            ))
+        })?;
+
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| {
+            asset.name == option.asset_name
+                && asset.browser_download_url == option.download_url
+                && is_windows_zip_asset(&asset.name, descriptor.asset_keywords)
+        })
+        .ok_or_else(|| {
+            AppError::Message(format!(
+                "{} の指定 asset が公式 GitHub Releases API で確認できませんでした。",
+                option.engine_id.label()
+            ))
+        })?;
+
+    ensure_release_archive_size(option.engine_id.label(), asset.size)?;
+    let verified_option = release_asset_option(option.engine_id, release, asset);
+    validate_release_option(&verified_option)?;
+    Ok(verified_option)
+}
+
+fn copy_response_with_limit(
+    response: &mut impl Read,
+    output: &mut fs::File,
+    engine_label: &str,
+) -> AppResult<u64> {
+    let mut downloaded_size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+
+    loop {
+        let read_size = response.read(&mut buffer)?;
+        if read_size == 0 {
+            break;
+        }
+
+        downloaded_size = downloaded_size
+            .checked_add(read_size as u64)
+            .ok_or_else(|| AppError::Message("ZIP サイズの計算が上限を超えました。".into()))?;
+
+        if downloaded_size > MAX_RELEASE_ARCHIVE_BYTES {
+            return Err(AppError::Message(format!(
+                "{engine_label} の公式配布 ZIP はダウンロード中に上限サイズ 1GB を超えました。"
+            )));
+        }
+
+        output.write_all(&buffer[..read_size])?;
+    }
+
+    Ok(downloaded_size)
+}
+
+fn download_release_archive(
+    client: &Client,
+    option: &EngineInstallOption,
+    output_path: &Path,
+) -> AppResult<()> {
+    validate_release_option(option)?;
+    let engine_label = option.engine_id.label();
+    ensure_release_archive_size(engine_label, option.size)?;
+
+    let mut response = client
+        .get(&option.download_url)
+        .header("Accept", "application/octet-stream")
+        .send()
+        .map_err(|error| {
+            AppError::Message(format!(
+                "{} のダウンロード開始に失敗しました: {error}",
+                engine_label
+            ))
+        })?;
+
+    ensure_success_status(response.status(), "公式配布 ZIP のダウンロード")?;
+
+    if let Some(content_length) = response.content_length() {
+        if content_length > MAX_RELEASE_ARCHIVE_BYTES {
+            return Err(AppError::Message(format!(
+                "{engine_label} の公式配布 ZIP は Content-Length が上限サイズ 1GB を超えています。（{} bytes）",
+                content_length
+            )));
+        }
+    }
+
+    let mut output = fs::File::create(output_path)?;
+    let downloaded_size = copy_response_with_limit(&mut response, &mut output, engine_label)?;
+    output.flush()?;
+
+    if downloaded_size == 0 {
+        return Err(AppError::Message(
+            "ダウンロードした ZIP ファイルが空でした。".into(),
+        ));
+    }
+
+    if downloaded_size != option.size {
+        return Err(AppError::Message(format!(
+            "ダウンロードした ZIP サイズが一致しません。（期待値: {} bytes / 実際: {} bytes）",
+            option.size, downloaded_size
+        )));
+    }
+
+    Ok(())
 }
 
 fn find_executable(root: &Path, executable_names: &[&str]) -> Option<PathBuf> {
@@ -245,7 +598,7 @@ fn canonicalize_existing_dir(path: &Path, error_message: &str) -> AppResult<Path
 }
 
 fn candidate_root_priority(root: &Path) -> u8 {
-    if root.join("setting.json").is_file() && root.join("tools").is_dir() {
+    if root.join("tools").is_dir() {
         return 0;
     }
 
@@ -417,7 +770,7 @@ fn run_healthcheck(registration: &EngineRegistration) -> AppResult<()> {
 fn candidate_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
-    for var_name in ["PRISMPAGE_ENGINE_PATHS", "RAIV_HOME"] {
+    for var_name in ["PRISMPAGE_ENGINE_PATHS"] {
         if let Some(value) = env::var_os(var_name) {
             roots.extend(env::split_paths(&value));
         }
@@ -433,12 +786,13 @@ fn candidate_roots() -> Vec<PathBuf> {
                     .filter_map(Result::ok)
                     .filter(|entry| entry.file_type().is_dir())
                     .filter(|entry| {
-                        entry
-                            .file_name()
-                            .to_string_lossy()
-                            .to_ascii_lowercase()
-                            .contains("raiv")
-                            || entry.path().join("setting.json").is_file()
+                        let file_name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                        file_name.contains("realcugan")
+                            || file_name.contains("real-cugan")
+                            || file_name.contains("waifu2x")
+                            || file_name.contains("realesrgan")
+                            || file_name.contains("real-esrgan")
+                            || entry.path().join("tools").is_dir()
                     })
                     .map(|entry| entry.into_path()),
             );
@@ -448,7 +802,14 @@ fn candidate_roots() -> Vec<PathBuf> {
     for var_name in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
         if let Some(value) = env::var_os(var_name) {
             let root = PathBuf::from(value);
-            for candidate in ["RAIV", "Real-CUGAN", "Real-ESRGAN"] {
+            for candidate in [
+                "Real-CUGAN",
+                "realcugan-ncnn-vulkan",
+                "waifu2x",
+                "waifu2x-ncnn-vulkan",
+                "Real-ESRGAN",
+                "realesrgan-ncnn-vulkan",
+            ] {
                 let path = root.join(candidate);
                 if path.is_dir() {
                     roots.push(path);
@@ -477,8 +838,8 @@ fn candidate_roots() -> Vec<PathBuf> {
 }
 
 fn candidate_source(root: &Path) -> String {
-    if root.join("setting.json").is_file() && root.join("tools").is_dir() {
-        "RAIV 検出候補".into()
+    if root.join("tools").is_dir() {
+        "既存ツール候補".into()
     } else {
         "PC 内の検出候補".into()
     }
@@ -489,6 +850,7 @@ fn source_label(source: &str) -> String {
         "legacy" => "既存登録".into(),
         "directory" => "外部フォルダ".into(),
         "archive" => "ZIP 取込".into(),
+        "download" => "アプリ内インストール".into(),
         "manual" => "手動登録".into(),
         value => value.to_string(),
     }
@@ -626,6 +988,25 @@ pub fn get_engine_statuses(app: &AppHandle) -> AppResult<Vec<EngineStatus>> {
         .collect())
 }
 
+pub fn get_engine_install_options() -> AppResult<EngineInstallOptionsResponse> {
+    let client = github_client(Duration::from_secs(45))?;
+    let mut options = Vec::new();
+    let mut warnings = Vec::new();
+
+    for engine_id in all_engine_ids() {
+        match find_release_assets(&client, engine_id) {
+            Ok(mut engine_options) => options.append(&mut engine_options),
+            Err(error) => warnings.push(EngineInstallWarning {
+                engine_id,
+                label: engine_id.label().to_string(),
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    Ok(EngineInstallOptionsResponse { options, warnings })
+}
+
 pub fn register_engine_directory(
     app: &AppHandle,
     engine_id: EngineId,
@@ -650,21 +1031,17 @@ pub fn register_engine_directory(
     Ok(build_status(engine_id, registry.engines.get(&engine_id)))
 }
 
-pub fn import_engine_archive(
+fn install_archive_from_path(
     app: &AppHandle,
     engine_id: EngineId,
-    archive_path: &str,
+    archive_path: &Path,
+    source: &str,
 ) -> AppResult<EngineStatus> {
-    let registry_lock = app.state::<RegistryLock>();
-    let _guard = registry_lock
-        .0
-        .lock()
-        .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
-    let archive_bytes = fs::read(archive_path)?;
     let extraction_root = create_unique_extraction_root(app, engine_id)?;
 
     let result = (|| -> AppResult<EngineStatus> {
-        let mut archive = ZipArchive::new(Cursor::new(archive_bytes))?;
+        let archive_file = fs::File::open(archive_path)?;
+        let mut archive = ZipArchive::new(archive_file)?;
 
         for index in 0..archive.len() {
             let mut file = archive.by_index(index)?;
@@ -689,7 +1066,7 @@ pub fn import_engine_archive(
 
         let mut registry = load_registry(app)?;
         let mut registration = infer_registration(engine_id, &extraction_root)?;
-        registration.source = "archive".into();
+        registration.source = source.into();
         registry.engines.insert(engine_id, registration);
         save_registry(app, &registry)?;
         Ok(build_status(engine_id, registry.engines.get(&engine_id)))
@@ -700,6 +1077,49 @@ pub fn import_engine_archive(
     }
 
     result
+}
+
+pub fn import_engine_archive(
+    app: &AppHandle,
+    engine_id: EngineId,
+    archive_path: &str,
+) -> AppResult<EngineStatus> {
+    let registry_lock = app.state::<RegistryLock>();
+    let _guard = registry_lock
+        .0
+        .lock()
+        .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
+    let archive_path = Path::new(archive_path);
+    if !archive_path.is_file() {
+        return Err(AppError::Message(
+            "指定された ZIP ファイルが見つかりません。".into(),
+        ));
+    }
+
+    install_archive_from_path(app, engine_id, archive_path, "archive")
+}
+
+pub fn install_engine_from_release(
+    app: &AppHandle,
+    option: EngineInstallOption,
+) -> AppResult<EngineStatus> {
+    let client = github_client(Duration::from_secs(15 * 60))?;
+    let verified_option = verify_release_option(&client, &option)?;
+    let downloads_root = tools_dir(app, verified_option.engine_id)?.join("_downloads");
+    fs::create_dir_all(&downloads_root)?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix("release-")
+        .tempdir_in(downloads_root)?;
+    let archive_path = temp_dir.path().join("engine.zip");
+    download_release_archive(&client, &verified_option, &archive_path)?;
+
+    let registry_lock = app.state::<RegistryLock>();
+    let _guard = registry_lock
+        .0
+        .lock()
+        .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
+
+    install_archive_from_path(app, verified_option.engine_id, &archive_path, "download")
 }
 
 pub fn clear_engine_registration(

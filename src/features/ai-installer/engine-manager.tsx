@@ -4,6 +4,8 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   AlertCircle,
   CheckCircle2,
+  DownloadCloud,
+  ExternalLink,
   FolderSearch,
   HardDrive,
   PackagePlus,
@@ -14,13 +16,21 @@ import {
 import {
   clearEngineRegistration,
   detectEngineCandidates,
+  getEngineInstallOptions,
   getEngineStatuses,
   importEngineArchive,
+  installEngineFromRelease,
   isTauriRuntime,
   registerEngineDirectory,
 } from '@/lib/tauri'
 import { engineOptions, getEngineDescription, getEngineLabel } from '@/lib/engines'
-import type { EngineCandidate, EngineId, EngineStatus } from '@/types/app'
+import type {
+  EngineCandidate,
+  EngineId,
+  EngineInstallOption,
+  EngineInstallWarning,
+  EngineStatus,
+} from '@/types/app'
 
 interface EngineManagerProps {
   preferredEngine: EngineId
@@ -39,6 +49,34 @@ function upsertEngineStatus(statuses: EngineStatus[], status: EngineStatus) {
   return [...statuses, status]
 }
 
+function formatBytes(size: number) {
+  if (!Number.isFinite(size) || size <= 0) {
+    return 'サイズ不明'
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = size
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
+function formatInstallWarnings(warnings: EngineInstallWarning[]) {
+  if (warnings.length === 0) {
+    return null
+  }
+
+  return warnings
+    .map((warning) => `${warning.label}: ${warning.message}`)
+    .join(' / ')
+}
+
 export function EngineManager({
   preferredEngine,
   onPreferredEngineChange,
@@ -46,6 +84,9 @@ export function EngineManager({
   const [statuses, setStatuses] = useState<EngineStatus[]>([])
   const [busyEngine, setBusyEngine] = useState<EngineId | null>(null)
   const [candidates, setCandidates] = useState<EngineCandidate[]>([])
+  const [installOptions, setInstallOptions] = useState<EngineInstallOption[]>([])
+  const [installWarnings, setInstallWarnings] = useState<EngineInstallWarning[]>([])
+  const [isLoadingInstallOptions, setIsLoadingInstallOptions] = useState(false)
   const [isDetecting, setIsDetecting] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -120,6 +161,102 @@ export function EngineManager({
     [statuses],
   )
 
+  const installOptionByEngine = useMemo(
+    () => {
+      const optionsByEngine = new Map<EngineId, EngineInstallOption>()
+
+      for (const option of installOptions) {
+        if (!optionsByEngine.has(option.engineId)) {
+          optionsByEngine.set(option.engineId, option)
+        }
+      }
+
+      return optionsByEngine
+    },
+    [installOptions],
+  )
+
+  const installWarningText = useMemo(
+    () => formatInstallWarnings(installWarnings),
+    [installWarnings],
+  )
+
+  async function fetchInstallOptions() {
+    setIsLoadingInstallOptions(true)
+    try {
+      const response = await getEngineInstallOptions()
+      setInstallOptions(response.options)
+      setInstallWarnings(response.warnings)
+      return response
+    } finally {
+      setIsLoadingInstallOptions(false)
+    }
+  }
+
+  async function handleRefreshInstallOptions() {
+    if (!ensureTauriRuntime()) {
+      return
+    }
+
+    try {
+      setMessage(null)
+      setError(null)
+      const response = await fetchInstallOptions()
+      const warningSuffix =
+        response.warnings.length > 0 ? '一部の候補は取得できませんでした。' : ''
+      setMessage(
+        response.options.length > 0
+          ? `公式配布の取得候補を更新しました。${warningSuffix}`
+          : '公式配布の取得候補は見つかりませんでした。',
+      )
+    } catch (installOptionError) {
+      setInstallWarnings([])
+      setError(
+        installOptionError instanceof Error
+          ? installOptionError.message
+          : '公式配布情報の取得に失敗しました。',
+      )
+    }
+  }
+
+  async function handleReleaseInstall(engineId: EngineId) {
+    if (!ensureTauriRuntime()) {
+      return
+    }
+
+    try {
+      setBusyEngine(engineId)
+      setMessage(`${getEngineLabel(engineId)} の公式配布候補を確認しています。`)
+      setError(null)
+      const response =
+        installOptions.length > 0
+          ? { options: installOptions, warnings: installWarnings }
+          : await fetchInstallOptions()
+      const option = response.options.find((entry) => entry.engineId === engineId)
+
+      if (!option) {
+        const warning = response.warnings.find((entry) => entry.engineId === engineId)
+        throw new Error(
+          warning?.message ?? `${getEngineLabel(engineId)} の公式配布候補が見つかりませんでした。`,
+        )
+      }
+
+      setMessage(`${getEngineLabel(engineId)} の公式配布を取得しています。`)
+      const status = await installEngineFromRelease(option)
+      setStatuses((current) => upsertEngineStatus(current, status))
+      onPreferredEngineChange(status.id)
+      setMessage(`${getEngineLabel(status.id)} をアプリ内にインストールしました。`)
+    } catch (installError) {
+      setError(
+        installError instanceof Error
+          ? installError.message
+          : '公式配布のインストールに失敗しました。',
+      )
+    } finally {
+      setBusyEngine(null)
+    }
+  }
+
   async function handleDirectoryImport(engineId: EngineId) {
     if (!ensureTauriRuntime()) {
       return
@@ -131,7 +268,7 @@ export function EngineManager({
       selectedPath = await open({
         directory: true,
         multiple: false,
-        title: 'PC 上の AI エンジンまたは RAIV フォルダを選択',
+        title: 'PC 上の AI エンジンフォルダを選択',
       })
     } catch (dialogError) {
       setError(
@@ -178,7 +315,7 @@ export function EngineManager({
       setMessage(
         nextCandidates.length > 0
           ? `${nextCandidates.length} 件の AI エンジン候補を見つけました。`
-          : 'PC 内の既定候補から AI エンジンは見つかりませんでした。RAIV フォルダを手動指定してください。',
+          : 'PC 内の既定候補から AI エンジンは見つかりませんでした。公式配布のアプリ内インストール、またはフォルダ手動指定を利用してください。',
       )
     } catch (detectError) {
       setError(
@@ -303,8 +440,8 @@ export function EngineManager({
         <div>
           <h2>AI エンジン管理</h2>
           <p>
-            PC 上にある RAIV / Real-CUGAN / waifu2x / Real-ESRGAN を登録して使います。
-            モデルはアプリ内へコピーせず、既存フォルダを参照します。
+            公式配布 ZIP をアプリ内で取得してインストールできます。
+            PC 上の既存フォルダ参照や手動 ZIP 取込も利用できます。
           </p>
         </div>
       </div>
@@ -313,13 +450,27 @@ export function EngineManager({
         <button
           type="button"
           className="button"
+          onClick={() => void handleRefreshInstallOptions()}
+          disabled={!isTauriRuntime || isLoadingInstallOptions}
+        >
+          <DownloadCloud size={16} />
+          {isLoadingInstallOptions ? '確認中...' : '公式配布情報を確認'}
+        </button>
+        <button
+          type="button"
+          className="ghost-button"
           onClick={() => void handleDetectCandidates()}
-          disabled={isDetecting}
+          disabled={!isTauriRuntime || isDetecting}
         >
           <Search size={16} />
           {isDetecting ? '検索中...' : 'PC 内の候補を検索'}
         </button>
-        <button type="button" className="ghost-button" onClick={() => void refreshStatuses()}>
+        <button
+          type="button"
+          className="ghost-button"
+          onClick={() => void refreshStatuses()}
+          disabled={!isTauriRuntime}
+        >
           <RefreshCw size={16} />
           状態を再読込
         </button>
@@ -327,6 +478,9 @@ export function EngineManager({
 
       {message ? <div className="message-strip is-success">{message}</div> : null}
       {error ? <div className="message-strip is-error">{error}</div> : null}
+      {installWarningText ? (
+        <div className="message-strip is-error">{installWarningText}</div>
+      ) : null}
 
       {candidates.length > 0 ? (
         <div className="candidate-list">
@@ -360,7 +514,7 @@ export function EngineManager({
                 type="button"
                 className="button"
                 onClick={() => void handleCandidateRegister(candidate)}
-                disabled={busyEngine === candidate.id}
+                disabled={!isTauriRuntime || busyEngine === candidate.id}
               >
                 この候補を登録
               </button>
@@ -372,6 +526,7 @@ export function EngineManager({
       <div className="engine-grid">
         {orderedStatuses.map((status) => {
           const isBusy = busyEngine === status.id
+          const installOption = installOptionByEngine.get(status.id)
 
           return (
             <article key={status.id} className="engine-card">
@@ -416,6 +571,16 @@ export function EngineManager({
                 <code>{status.modelPath ?? '未設定'}</code>
               </div>
 
+              {installOption ? (
+                <div className="field-stack">
+                  <span className="helper-text">公式配布候補</span>
+                  <code>
+                    {installOption.releaseName} ({installOption.releaseTag}) /{' '}
+                    {installOption.assetName} ({formatBytes(installOption.size)})
+                  </code>
+                </div>
+              ) : null}
+
               {status.warning ? <div className="message-strip is-error">{status.warning}</div> : null}
 
               <ul className="note-list">
@@ -428,6 +593,15 @@ export function EngineManager({
                 <button
                   type="button"
                   className="button"
+                  onClick={() => void handleReleaseInstall(status.id)}
+                  disabled={!isTauriRuntime || isBusy || isLoadingInstallOptions}
+                >
+                  <DownloadCloud size={16} />
+                  {isBusy ? '取得・インストール中...' : '公式配布を取得してインストール'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button"
                   onClick={() => onPreferredEngineChange(status.id)}
                   disabled={preferredEngine === status.id}
                 >
@@ -437,7 +611,7 @@ export function EngineManager({
                   type="button"
                   className="ghost-button"
                   onClick={() => void handleArchiveImport(status.id)}
-                  disabled={isBusy}
+                  disabled={!isTauriRuntime || isBusy}
                 >
                   <PackagePlus size={16} />
                   ZIP 取込（互換）
@@ -446,7 +620,7 @@ export function EngineManager({
                   type="button"
                   className="ghost-button"
                   onClick={() => void handleDirectoryImport(status.id)}
-                  disabled={isBusy}
+                  disabled={!isTauriRuntime || isBusy}
                 >
                   <FolderSearch size={16} />
                   PC 上のフォルダを指定
@@ -456,13 +630,14 @@ export function EngineManager({
                   className="ghost-button"
                   onClick={() => void handleOpenDownloadUrl(status.downloadUrl)}
                 >
+                  <ExternalLink size={16} />
                   公式配布ページ
                 </button>
                 <button
                   type="button"
                   className="ghost-button"
                   onClick={() => void handleClear(status.id)}
-                  disabled={!status.configured || isBusy}
+                  disabled={!isTauriRuntime || !status.configured || isBusy}
                 >
                   登録解除
                 </button>
