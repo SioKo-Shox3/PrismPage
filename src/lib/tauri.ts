@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  EnhanceBookImageRequest,
+  EnhanceBookImageResponse,
   EnhanceImageRequest,
   EnhanceImageResponse,
   EngineCandidate,
@@ -52,6 +54,10 @@ export async function clearEngineRegistration(engineId: EngineId) {
 
 export async function enhanceImage(request: EnhanceImageRequest) {
   return invoke<EnhanceImageResponse>('enhance_image', { request })
+}
+
+export async function enhanceBookImage(request: EnhanceBookImageRequest) {
+  return invoke<EnhanceBookImageResponse>('enhance_book_image', { request })
 }
 
 export async function takePendingOpenedEpubs() {

@@ -19,11 +19,11 @@ use zip::ZipArchive;
 use crate::app_error::{AppError, AppResult};
 use crate::models::{
     EngineCandidate, EngineId, EngineInstallOption, EngineInstallOptionsResponse,
-    EngineInstallWarning, EngineRegistration, EngineRegistry, EngineStatus, EnhanceImageRequest,
-    EnhanceImageResponse,
+    EngineInstallWarning, EngineRegistration, EngineRegistry, EngineStatus,
+    EnhanceBookImageRequest, EnhanceBookImageResponse, EnhanceImageRequest, EnhanceImageResponse,
 };
 use crate::services::app_data_dir;
-use crate::state::RegistryLock;
+use crate::state::{EnhancementLock, RegistryLock};
 
 struct TimedOutput {
     status: ExitStatus,
@@ -1150,30 +1150,34 @@ fn decode_data_url(data_url: &str) -> AppResult<Vec<u8>> {
         .map_err(|error| AppError::Message(format!("画像データの復号に失敗しました: {error}")))
 }
 
-pub fn enhance_image(
+fn encode_png_data_url(bytes: &[u8]) -> String {
+    format!("data:image/png;base64,{}", BASE64_STANDARD.encode(bytes))
+}
+
+fn load_engine_registration(app: &AppHandle, engine_id: EngineId) -> AppResult<EngineRegistration> {
+    let registry_lock = app.state::<RegistryLock>();
+    let _guard = registry_lock
+        .0
+        .lock()
+        .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
+    let registry = load_registry(app)?;
+    registry.engines.get(&engine_id).cloned().ok_or_else(|| {
+        AppError::Message("選択した AI エンジンはまだ登録されていません。".into())
+    })
+}
+
+fn run_enhancement_command(
     app: &AppHandle,
-    request: EnhanceImageRequest,
-) -> AppResult<EnhanceImageResponse> {
-    let registration = {
-        let registry_lock = app.state::<RegistryLock>();
-        let _guard = registry_lock
-            .0
-            .lock()
-            .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
-        let registry = load_registry(app)?;
-        registry
-            .engines
-            .get(&request.engine_id)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Message("選択した AI エンジンはまだ登録されていません。".into())
-            })?
-    };
+    engine_id: EngineId,
+    scale: u8,
+    image_data_url: &str,
+) -> AppResult<Vec<u8>> {
+    let registration = load_engine_registration(app, engine_id)?;
 
     let temp_dir = tempdir()?;
     let input_path = temp_dir.path().join("input.png");
     let output_path = temp_dir.path().join("output.png");
-    fs::write(&input_path, decode_data_url(&request.image_data_url)?)?;
+    fs::write(&input_path, decode_data_url(image_data_url)?)?;
 
     let mut command = Command::new(&registration.executable_path);
     command
@@ -1186,9 +1190,9 @@ pub fn enhance_image(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let scale = request.scale.to_string();
+    let scale_arg = scale.to_string();
 
-    match request.engine_id {
+    match engine_id {
         EngineId::RealCugan => {
             command
                 .arg("-i")
@@ -1196,7 +1200,7 @@ pub fn enhance_image(
                 .arg("-o")
                 .arg(output_path.to_string_lossy().as_ref())
                 .arg("-s")
-                .arg(&scale)
+                .arg(&scale_arg)
                 .arg("-n")
                 .arg("0")
                 .arg("-m")
@@ -1213,7 +1217,7 @@ pub fn enhance_image(
                 .arg("-o")
                 .arg(output_path.to_string_lossy().as_ref())
                 .arg("-s")
-                .arg(&scale)
+                .arg(&scale_arg)
                 .arg("-n")
                 .arg("1")
                 .arg("-m")
@@ -1222,14 +1226,14 @@ pub fn enhance_image(
                 .arg("png");
         }
         EngineId::RealEsrgan => {
-            let model_name = ensure_realesrgan_model_available(&registration, request.scale)?;
+            let model_name = ensure_realesrgan_model_available(&registration, scale)?;
             command
                 .arg("-i")
                 .arg(input_path.to_string_lossy().as_ref())
                 .arg("-o")
                 .arg(output_path.to_string_lossy().as_ref())
                 .arg("-s")
-                .arg(&scale)
+                .arg(&scale_arg)
                 .arg("-m")
                 .arg(registration.model_path.as_str())
                 .arg("-n")
@@ -1260,10 +1264,104 @@ pub fn enhance_image(
     }
 
     let enhanced_bytes = fs::read(output_path)?;
+    Ok(enhanced_bytes)
+}
+
+fn normalize_book_id(book_id: &str) -> AppResult<String> {
+    Uuid::parse_str(book_id)
+        .map(|id| id.to_string())
+        .map_err(|_| AppError::Message("書籍 ID の形式が不正です。".into()))
+}
+
+fn normalize_image_hash(image_hash: &str) -> AppResult<String> {
+    let normalized = image_hash.trim().to_ascii_lowercase();
+
+    if normalized.len() != 64
+        || !normalized
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(AppError::Message(
+            "画像キャッシュキーは 64 桁の hex 文字列で指定してください。".into(),
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn enhanced_image_cache_path(
+    app: &AppHandle,
+    book_id: &str,
+    engine_id: EngineId,
+    scale: u8,
+    image_hash: &str,
+) -> AppResult<PathBuf> {
+    let book_id = normalize_book_id(book_id)?;
+    let image_hash = normalize_image_hash(image_hash)?;
+    let cache_dir = app_data_dir(app)?
+        .join("enhanced-images")
+        .join(book_id)
+        .join(engine_id.as_str())
+        .join(scale.to_string());
+
+    fs::create_dir_all(&cache_dir)?;
+    Ok(cache_dir.join(format!("{image_hash}.png")))
+}
+
+pub fn enhance_image(
+    app: &AppHandle,
+    request: EnhanceImageRequest,
+) -> AppResult<EnhanceImageResponse> {
+    let enhanced_bytes = run_enhancement_command(
+        app,
+        request.engine_id,
+        request.scale,
+        &request.image_data_url,
+    )?;
+
     Ok(EnhanceImageResponse {
-        image_data_url: format!(
-            "data:image/png;base64,{}",
-            BASE64_STANDARD.encode(enhanced_bytes)
-        ),
+        image_data_url: encode_png_data_url(&enhanced_bytes),
+    })
+}
+
+pub fn enhance_book_image(
+    app: &AppHandle,
+    request: EnhanceBookImageRequest,
+) -> AppResult<EnhanceBookImageResponse> {
+    let cache_path = enhanced_image_cache_path(
+        app,
+        &request.book_id,
+        request.engine_id,
+        request.scale,
+        &request.image_hash,
+    )?;
+    decode_data_url(&request.image_data_url)?;
+
+    let enhancement_lock = app.state::<EnhancementLock>();
+    let _guard = enhancement_lock
+        .0
+        .lock()
+        .map_err(|_| AppError::Message("AI 画像キャッシュの排他制御に失敗しました。".into()))?;
+
+    if cache_path.is_file() {
+        let cached_bytes = fs::read(cache_path)?;
+        return Ok(EnhanceBookImageResponse {
+            cache_hit: true,
+            image_data_url: encode_png_data_url(&cached_bytes),
+        });
+    }
+
+    let enhanced_bytes = run_enhancement_command(
+        app,
+        request.engine_id,
+        request.scale,
+        &request.image_data_url,
+    )?;
+
+    fs::write(&cache_path, &enhanced_bytes)?;
+
+    Ok(EnhanceBookImageResponse {
+        cache_hit: false,
+        image_data_url: encode_png_data_url(&enhanced_bytes),
     })
 }

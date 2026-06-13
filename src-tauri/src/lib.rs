@@ -10,6 +10,14 @@ use tauri::{Emitter, Manager};
 
 const OPENED_EPUB_EVENT: &str = "epub-files-opened";
 
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn normalize_epub_path(path: PathBuf) -> Option<String> {
     let path = std::fs::canonicalize(path).ok()?;
 
@@ -83,8 +91,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state::OpenedEpubPaths::default())
         .manage(state::RegistryLock::default())
+        .manage(state::EnhancementLock::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let cwd = PathBuf::from(cwd);
+            focus_main_window(app);
             store_and_emit_opened_epubs(app, collect_epub_args(args, Some(&cwd)));
         }))
         .plugin(tauri_plugin_dialog::init())
@@ -117,6 +127,7 @@ pub fn run() {
             commands::engines::install_engine_from_release,
             commands::engines::clear_engine_registration,
             commands::engines::enhance_image,
+            commands::engines::enhance_book_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

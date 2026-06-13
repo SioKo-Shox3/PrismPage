@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { Link, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { BookOpenText, ImageUpscale, Library, Settings2 } from 'lucide-react'
 
+import prismLogo from '@/assets/prismpage-logo.png'
 import { useLibraryStore } from '@/features/library/book-store'
 import { useSettingsStore } from '@/features/settings/settings-store'
 import { extractEpubPreview } from '@/lib/epub'
@@ -32,6 +33,7 @@ function App() {
   const [openedFileMessage, setOpenedFileMessage] = useState<string | null>(null)
   const [openedFileError, setOpenedFileError] = useState<string | null>(null)
   const processingPathsRef = useRef(new Set<string>())
+  const isReaderRoute = location.pathname.startsWith('/reader/')
 
   const completedBooks = books.filter((book) => (book.progressPercentage ?? 0) >= 99).length
 
@@ -166,69 +168,73 @@ function App() {
   }, [navigate, upsertBook])
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-panel">
-          <span className="eyebrow">AI EPUB Viewer</span>
-          <h1>PrismPage</h1>
-          <p>
-            画像重視の EPUB 読書体験に、AI 超解像の切り替えと導入支援を統合した
-            Tauri ビューワー。
-          </p>
-        </div>
-
-        <nav className="main-nav" aria-label="アプリケーションナビゲーション">
-          {navItems.map((item) => {
-            const Icon = item.icon
-            const isActive = location.pathname === item.href
-
-            return (
-              <Link
-                key={item.href}
-                to={item.href}
-                className={`nav-link${isActive ? ' is-active' : ''}`}
-              >
-                <Icon size={18} />
-                <span>{item.label}</span>
-              </Link>
-            )
-          })}
-        </nav>
-
-        <section className="status-card">
-          <div className="status-card-header">
-            <BookOpenText size={18} />
-            <h2>ライブラリ状況</h2>
-          </div>
-          <dl>
+    <div className={`app-shell${isReaderRoute ? ' app-shell--reader' : ''}`}>
+      {!isReaderRoute ? (
+        <aside className="sidebar">
+          <div className="brand-panel">
+            <img src={prismLogo} alt="" className="brand-logo" />
             <div>
-              <dt>登録冊数</dt>
-              <dd>{books.length}</dd>
+              <span className="eyebrow">AI EPUB Viewer</span>
+              <h1>PrismPage</h1>
+              <p>画像重視の EPUB を本棚からすぐ読める Tauri ビューワー。</p>
             </div>
-            <div>
-              <dt>読了済み</dt>
-              <dd>{completedBooks}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section className="status-card">
-          <div className="status-card-header">
-            <ImageUpscale size={18} />
-            <h2>AI 優先エンジン</h2>
           </div>
-          <p className="status-card-value">
-            {getEngineLabel(preferredEngine)}
-          </p>
-          <p className="muted">設定画面からエンジン切り替えと導入支援を行えます。</p>
-        </section>
-      </aside>
 
-      <main className="content-shell">
-        {openedFileMessage ? (
-          <div className="message-strip is-success">{openedFileMessage}</div>
+          <nav className="main-nav" aria-label="アプリケーションナビゲーション">
+            {navItems.map((item) => {
+              const Icon = item.icon
+              const isActive = location.pathname === item.href
+
+              return (
+                <Link
+                  key={item.href}
+                  to={item.href}
+                  className={`nav-link${isActive ? ' is-active' : ''}`}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </Link>
+              )
+            })}
+          </nav>
+
+          <section className="status-card">
+            <div className="status-card-header">
+              <BookOpenText size={18} />
+              <h2>ライブラリ</h2>
+            </div>
+            <dl>
+              <div>
+                <dt>登録冊数</dt>
+                <dd>{books.length}</dd>
+              </div>
+              <div>
+                <dt>読了済み</dt>
+                <dd>{completedBooks}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section className="status-card">
+            <div className="status-card-header">
+              <ImageUpscale size={18} />
+              <h2>AI エンジン</h2>
+            </div>
+            <p className="status-card-value">{getEngineLabel(preferredEngine)}</p>
+            <p className="muted">表示中の画像へ自動適用します。</p>
+          </section>
+        </aside>
+      ) : null}
+
+      <main className={`content-shell${isReaderRoute ? ' content-shell--reader' : ''}`}>
+        {openedFileMessage || openedFileError ? (
+          <div className={`app-toast-stack${isReaderRoute ? ' is-reader' : ''}`}>
+            {openedFileMessage ? (
+              <div className="message-strip is-success">{openedFileMessage}</div>
+            ) : null}
+            {openedFileError ? <div className="message-strip is-error">{openedFileError}</div> : null}
+          </div>
         ) : null}
-        {openedFileError ? <div className="message-strip is-error">{openedFileError}</div> : null}
         <Outlet />
       </main>
     </div>

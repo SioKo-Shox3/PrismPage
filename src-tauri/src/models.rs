@@ -140,3 +140,20 @@ pub struct EnhanceImageRequest {
 pub struct EnhanceImageResponse {
     pub image_data_url: String,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhanceBookImageRequest {
+    pub book_id: String,
+    pub engine_id: EngineId,
+    pub image_hash: String,
+    pub image_data_url: String,
+    pub scale: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhanceBookImageResponse {
+    pub cache_hit: bool,
+    pub image_data_url: String,
+}

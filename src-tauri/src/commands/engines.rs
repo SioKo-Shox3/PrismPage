@@ -1,8 +1,9 @@
 use tauri::AppHandle;
 
 use crate::models::{
-    EngineCandidate, EngineId, EngineInstallOption, EngineInstallOptionsResponse, EngineStatus,
-    EnhanceImageRequest, EnhanceImageResponse,
+    EngineCandidate, EngineId, EngineInstallOption, EngineInstallOptionsResponse,
+    EngineStatus, EnhanceBookImageRequest, EnhanceBookImageResponse, EnhanceImageRequest,
+    EnhanceImageResponse,
 };
 use crate::services::engines as engine_service;
 
@@ -63,4 +64,12 @@ pub fn enhance_image(
     request: EnhanceImageRequest,
 ) -> Result<EnhanceImageResponse, String> {
     engine_service::enhance_image(&app, request).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn enhance_book_image(
+    app: AppHandle,
+    request: EnhanceBookImageRequest,
+) -> Result<EnhanceBookImageResponse, String> {
+    engine_service::enhance_book_image(&app, request).map_err(|error| error.to_string())
 }

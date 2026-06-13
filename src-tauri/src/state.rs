@@ -15,3 +15,11 @@ impl Default for RegistryLock {
         Self(Mutex::new(()))
     }
 }
+
+pub struct EnhancementLock(pub Mutex<()>);
+
+impl Default for EnhancementLock {
+    fn default() -> Self {
+        Self(Mutex::new(()))
+    }
+}

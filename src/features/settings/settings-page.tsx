@@ -1,4 +1,4 @@
-import { Settings2, Sparkles } from 'lucide-react'
+import { BookOpenText, ImageUpscale, Settings2, Sparkles } from 'lucide-react'
 
 import { EngineManager } from '@/features/ai-installer/engine-manager'
 import { useSettingsStore } from '@/features/settings/settings-store'
@@ -7,12 +7,14 @@ import { engineOptions } from '@/lib/engines'
 
 export function SettingsPage() {
   const {
+    autoEnhanceVisibleImages,
     autoEnhanceZoomedImage,
     enhancementEnabled,
     fontScale,
     lineHeight,
     preferredEngine,
     setAutoEnhanceZoomedImage,
+    setAutoEnhanceVisibleImages,
     setEnhancementEnabled,
     setFontScale,
     setLineHeight,
@@ -28,21 +30,21 @@ export function SettingsPage() {
       <header className="page-header">
         <div>
           <span className="eyebrow">Settings</span>
-          <h1>読書と AI の設定</h1>
-          <p>テーマ、文字サイズ、AI エンジン、拡大時の高精細化動作をここで調整します。</p>
+          <h1>読書設定</h1>
+          <p>表示、AI 自動適用、既定エンジンをまとめて調整します。</p>
         </div>
       </header>
 
       <section className="panel">
         <div className="section-header">
-          <Settings2 size={18} />
+          <BookOpenText size={18} />
           <div>
-            <h2>読書体験</h2>
-            <p>アプリ全体の見た目と本文レイアウトを調整します。</p>
+            <h2>表示と AI</h2>
+            <p>読書中は本文領域を優先し、必要な設定だけここにまとめます。</p>
           </div>
         </div>
 
-        <div className="settings-grid">
+        <div className="settings-compact-grid">
           <article className="setting-item">
             <div className="setting-item-header">
               <Sparkles size={18} />
@@ -107,10 +109,10 @@ export function SettingsPage() {
 
           <article className="setting-item">
             <div className="setting-item-header">
-              <Sparkles size={18} />
+              <ImageUpscale size={18} />
               <div>
-                <h3>AI 高精細化</h3>
-                <p>画像モーダル内の高精細化挙動を決めます。</p>
+                <h3>AI 自動適用</h3>
+                <p>表示中の画像へ選択中エンジンを自動で適用します。</p>
               </div>
             </div>
 
@@ -126,7 +128,7 @@ export function SettingsPage() {
             </label>
 
             <label className="field-label">
-              拡大倍率
+              適用倍率
               <select
                 value={zoomEnhancementScale}
                 onChange={(event) => setZoomEnhancementScale(Number(event.target.value))}
@@ -138,15 +140,28 @@ export function SettingsPage() {
             </label>
 
             <label className="field-label">
-              画像モーダルを開いたときに自動実行
+              読書中の表示画像
+              <select
+                value={autoEnhanceVisibleImages ? 'auto' : 'off'}
+                onChange={(event) =>
+                  setAutoEnhanceVisibleImages(event.target.value === 'auto')
+                }
+              >
+                <option value="auto">自動で高精細化</option>
+                <option value="off">元画像のまま</option>
+              </select>
+            </label>
+
+            <label className="field-label">
+              拡大表示を開いた画像
               <select
                 value={autoEnhanceZoomedImage ? 'auto' : 'manual'}
                 onChange={(event) =>
                   setAutoEnhanceZoomedImage(event.target.value === 'auto')
                 }
               >
-                <option value="manual">手動実行</option>
                 <option value="auto">自動実行</option>
+                <option value="manual">手動実行</option>
               </select>
             </label>
           </article>
@@ -156,7 +171,7 @@ export function SettingsPage() {
               <Sparkles size={18} />
               <div>
                 <h3>既定エンジン</h3>
-                <p>画像モーダルの既定値です。必要に応じて個別に切り替えできます。</p>
+                <p>読書中の自動高精細化に使うエンジンです。</p>
               </div>
             </div>
 

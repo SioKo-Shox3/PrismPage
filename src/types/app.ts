@@ -79,3 +79,16 @@ export interface EnhanceImageRequest {
 export interface EnhanceImageResponse {
   imageDataUrl: string
 }
+
+export interface EnhanceBookImageRequest {
+  bookId: string
+  engineId: EngineId
+  imageDataUrl: string
+  imageHash: string
+  scale: number
+}
+
+export interface EnhanceBookImageResponse {
+  cacheHit: boolean
+  imageDataUrl: string
+}
