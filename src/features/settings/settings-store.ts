@@ -10,6 +10,7 @@ interface SettingsState {
   preferredEngine: EngineId
   enhancementEnabled: boolean
   zoomEnhancementScale: number
+  precomputeBookImages: boolean
   autoEnhanceZoomedImage: boolean
   autoEnhanceVisibleImages: boolean
   setTheme: (theme: ThemeMode) => void
@@ -18,6 +19,7 @@ interface SettingsState {
   setPreferredEngine: (preferredEngine: EngineId) => void
   setEnhancementEnabled: (enhancementEnabled: boolean) => void
   setZoomEnhancementScale: (zoomEnhancementScale: number) => void
+  setPrecomputeBookImages: (precomputeBookImages: boolean) => void
   setAutoEnhanceZoomedImage: (autoEnhanceZoomedImage: boolean) => void
   setAutoEnhanceVisibleImages: (autoEnhanceVisibleImages: boolean) => void
 }
@@ -31,6 +33,7 @@ type PersistedSettings = Partial<
     | 'setPreferredEngine'
     | 'setEnhancementEnabled'
     | 'setZoomEnhancementScale'
+    | 'setPrecomputeBookImages'
     | 'setAutoEnhanceZoomedImage'
     | 'setAutoEnhanceVisibleImages'
   >
@@ -42,6 +45,7 @@ const defaultSettings = {
   enhancementEnabled: true,
   fontScale: 100,
   lineHeight: 1.6,
+  precomputeBookImages: true,
   preferredEngine: 'waifu2x' as EngineId,
   theme: 'dark' as ThemeMode,
   zoomEnhancementScale: 2,
@@ -57,6 +61,8 @@ export const useSettingsStore = create<SettingsState>()(
       setPreferredEngine: (preferredEngine) => set({ preferredEngine }),
       setEnhancementEnabled: (enhancementEnabled) => set({ enhancementEnabled }),
       setZoomEnhancementScale: (zoomEnhancementScale) => set({ zoomEnhancementScale }),
+      setPrecomputeBookImages: (precomputeBookImages) =>
+        set({ precomputeBookImages }),
       setAutoEnhanceZoomedImage: (autoEnhanceZoomedImage) =>
         set({ autoEnhanceZoomedImage }),
       setAutoEnhanceVisibleImages: (autoEnhanceVisibleImages) =>
@@ -76,6 +82,8 @@ export const useSettingsStore = create<SettingsState>()(
             persisted.autoEnhanceVisibleImages ?? defaultSettings.autoEnhanceVisibleImages,
           autoEnhanceZoomedImage:
             persisted.autoEnhanceZoomedImage ?? defaultSettings.autoEnhanceZoomedImage,
+          precomputeBookImages:
+            persisted.precomputeBookImages ?? defaultSettings.precomputeBookImages,
         }
       },
       name: 'prismpage-settings',

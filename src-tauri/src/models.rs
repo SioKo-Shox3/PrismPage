@@ -148,6 +148,8 @@ pub struct EnhanceBookImageRequest {
     pub engine_id: EngineId,
     pub image_hash: String,
     pub image_data_url: String,
+    pub job_id: String,
+    pub reader_session_id: String,
     pub scale: u8,
 }
 
@@ -156,4 +158,62 @@ pub struct EnhanceBookImageRequest {
 pub struct EnhanceBookImageResponse {
     pub cache_hit: bool,
     pub image_data_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanBookImagesRequest {
+    pub book_id: String,
+    pub engine_id: EngineId,
+    pub scale: u8,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedBookImage {
+    pub asset_path: String,
+    pub image_hash: String,
+    pub mime_type: String,
+    pub spine_index: u32,
+    pub order: u32,
+    pub cached: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanBookImagesResponse {
+    pub book_id: String,
+    pub engine_id: EngineId,
+    pub scale: u8,
+    pub total_images: usize,
+    pub cached_images: usize,
+    pub images: Vec<ScannedBookImage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhanceBookAssetImageRequest {
+    pub book_id: String,
+    pub engine_id: EngineId,
+    pub asset_path: String,
+    pub image_hash: String,
+    pub job_id: String,
+    pub reader_session_id: String,
+    pub scale: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhanceBookAssetImageResponse {
+    pub image_hash: String,
+    pub cache_hit: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadEnhancedBookImageRequest {
+    pub book_id: String,
+    pub engine_id: EngineId,
+    pub image_hash: String,
+    pub scale: u8,
 }

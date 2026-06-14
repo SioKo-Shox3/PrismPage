@@ -1,6 +1,6 @@
 [package]
 name = "prismpage"
-version = "0.1.1"
+version = "0.1.2"
 description = "An image-focused EPUB viewer with AI super-resolution support"
 authors = ["SioKo-Shox3"]
 license = ""
@@ -19,15 +19,20 @@ tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+percent-encoding = "2.3"
+quick-xml = "0.39"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
 log = "0.4"
 tauri = { version = "2.11.2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 tempfile = "3.23"
 thiserror = "2.0"
 uuid = { version = "1.18", features = ["v4", "serde"] }

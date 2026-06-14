@@ -1,8 +1,10 @@
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
 use base64::prelude::{Engine, BASE64_STANDARD};
@@ -20,10 +22,16 @@ use crate::app_error::{AppError, AppResult};
 use crate::models::{
     EngineCandidate, EngineId, EngineInstallOption, EngineInstallOptionsResponse,
     EngineInstallWarning, EngineRegistration, EngineRegistry, EngineStatus,
-    EnhanceBookImageRequest, EnhanceBookImageResponse, EnhanceImageRequest, EnhanceImageResponse,
+    EnhanceBookAssetImageRequest, EnhanceBookAssetImageResponse, EnhanceBookImageRequest,
+    EnhanceBookImageResponse, EnhanceImageRequest, EnhanceImageResponse, ReadEnhancedBookImageRequest,
 };
 use crate::services::app_data_dir;
-use crate::state::{EnhancementLock, RegistryLock};
+use crate::state::{
+    EnhancementJobState, EnhancementJobs, EnhancementLock, RegistryLock, RunningEnhancementJob,
+};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 struct TimedOutput {
     status: ExitStatus,
@@ -67,6 +75,15 @@ const REALESRGAN_ANIME_SCALE_MODELS: [&str; 3] = [
 ];
 const REALESRGAN_FALLBACK_MODELS: [&str; 2] = ["realesrgan-x4plus-anime", "realesrgan-x4plus"];
 const MAX_RELEASE_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_CANCELED_READER_SESSIONS: usize = 256;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+struct EnhancementJobContext {
+    job_id: String,
+    child: Arc<Mutex<Option<Child>>>,
+    canceled: Arc<AtomicBool>,
+}
 
 fn descriptor(engine_id: EngineId) -> EngineDescriptor {
     match engine_id {
@@ -190,6 +207,15 @@ fn now_unix() -> u64 {
 
 fn all_engine_ids() -> [EngineId; 3] {
     [EngineId::RealCugan, EngineId::Waifu2x, EngineId::RealEsrgan]
+}
+
+fn hide_command_window(command: &mut Command) -> &mut Command {
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
 }
 
 fn github_client(timeout: Duration) -> AppResult<Client> {
@@ -748,12 +774,15 @@ fn run_healthcheck(registration: &EngineRegistration) -> AppResult<()> {
         ));
     }
 
+    let mut command = Command::new(&executable_path);
+    hide_command_window(&mut command)
+        .arg("-h")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
     let output = run_command_with_timeout(
-        Command::new(&executable_path)
-            .arg("-h")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()),
+        &mut command,
         Duration::from_secs(5),
         "AI エンジンのヘルスチェックがタイムアウトしました。",
     )?;
@@ -930,6 +959,203 @@ fn run_command_with_timeout(
     let stderr = stderr_thread
         .map(|thread| thread.join().unwrap_or_default())
         .unwrap_or_default();
+
+    Ok(TimedOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn lock_enhancement_jobs(
+    jobs: &EnhancementJobs,
+) -> AppResult<std::sync::MutexGuard<'_, EnhancementJobState>> {
+    jobs.0
+        .lock()
+        .map_err(|_| AppError::Message("AI 高精細化ジョブの排他制御に失敗しました。".into()))
+}
+
+fn remember_canceled_reader_session(
+    jobs: &mut EnhancementJobState,
+    reader_session_id: &str,
+) {
+    if jobs.canceled_sessions.insert(reader_session_id.to_string()) {
+        jobs.canceled_session_order
+            .push_back(reader_session_id.to_string());
+    }
+
+    while jobs.canceled_session_order.len() > MAX_CANCELED_READER_SESSIONS {
+        if let Some(expired_reader_session_id) = jobs.canceled_session_order.pop_front() {
+            jobs.canceled_sessions.remove(&expired_reader_session_id);
+        }
+    }
+}
+
+fn ensure_reader_session_not_canceled(app: &AppHandle, reader_session_id: &str) -> AppResult<()> {
+    let enhancement_jobs = app.state::<EnhancementJobs>();
+    let jobs = lock_enhancement_jobs(&enhancement_jobs)?;
+
+    if jobs.canceled_sessions.contains(reader_session_id) {
+        return Err(enhancement_canceled_error());
+    }
+
+    Ok(())
+}
+
+fn validate_enhancement_job_identity(job_id: &str, reader_session_id: &str) -> AppResult<()> {
+    if job_id.trim().is_empty() {
+        return Err(AppError::Message("AI 高精細化ジョブ ID が空です。".into()));
+    }
+
+    if reader_session_id.trim().is_empty() {
+        return Err(AppError::Message("読書セッション ID が空です。".into()));
+    }
+
+    Ok(())
+}
+
+fn register_enhancement_job(
+    app: &AppHandle,
+    job_id: &str,
+    reader_session_id: &str,
+) -> AppResult<EnhancementJobContext> {
+    validate_enhancement_job_identity(job_id, reader_session_id)?;
+
+    let child = Arc::new(Mutex::new(None));
+    let canceled = Arc::new(AtomicBool::new(false));
+    let enhancement_jobs = app.state::<EnhancementJobs>();
+    let mut jobs = lock_enhancement_jobs(&enhancement_jobs)?;
+
+    if jobs.canceled_sessions.contains(reader_session_id) {
+        return Err(enhancement_canceled_error());
+    }
+
+    if jobs.running.contains_key(job_id) {
+        return Err(AppError::Message(
+            "AI 高精細化ジョブ ID が重複しています。".into(),
+        ));
+    }
+
+    jobs.running.insert(
+        job_id.to_string(),
+        RunningEnhancementJob {
+            reader_session_id: reader_session_id.to_string(),
+            child: Arc::clone(&child),
+            canceled: Arc::clone(&canceled),
+        },
+    );
+
+    Ok(EnhancementJobContext {
+        job_id: job_id.to_string(),
+        child,
+        canceled,
+    })
+}
+
+fn finish_enhancement_job(app: &AppHandle, job_id: &str) {
+    let enhancement_jobs = app.state::<EnhancementJobs>();
+    let Ok(mut jobs) = lock_enhancement_jobs(&enhancement_jobs) else {
+        return;
+    };
+    jobs.running.remove(job_id);
+}
+
+fn enhancement_canceled_error() -> AppError {
+    AppError::Message("AI 高精細化ジョブをキャンセルしました。".into())
+}
+
+fn run_cancellable_command_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+    timeout_message: &str,
+    job: &EnhancementJobContext,
+) -> AppResult<TimedOutput> {
+    if job.canceled.load(Ordering::SeqCst) {
+        return Err(enhancement_canceled_error());
+    }
+
+    let mut child = command.spawn()?;
+    let stdout_thread = child.stdout.take().map(|mut handle| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = handle.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+    let stderr_thread = child.stderr.take().map(|mut handle| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = handle.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+
+    {
+        let mut child_guard = job
+            .child
+            .lock()
+            .map_err(|_| AppError::Message("AI 高精細化ジョブの状態更新に失敗しました。".into()))?;
+
+        if job.canceled.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(thread) = stdout_thread {
+                let _ = thread.join();
+            }
+            if let Some(thread) = stderr_thread {
+                let _ = thread.join();
+            }
+            return Err(enhancement_canceled_error());
+        }
+
+        *child_guard = Some(child);
+    }
+
+    let started_at = Instant::now();
+    let status_result = loop {
+        if job.canceled.load(Ordering::SeqCst) {
+            if let Ok(mut child_guard) = job.child.lock() {
+                if let Some(child) = child_guard.as_mut() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+            break Err(enhancement_canceled_error());
+        }
+
+        {
+            let mut child_guard = job.child.lock().map_err(|_| {
+                AppError::Message("AI 高精細化ジョブの状態取得に失敗しました。".into())
+            })?;
+            let child = child_guard.as_mut().ok_or_else(|| {
+                AppError::Message("AI 高精細化ジョブの実行状態が見つかりません。".into())
+            })?;
+
+            if let Some(status) = child.try_wait()? {
+                break Ok(status);
+            }
+        }
+
+        if started_at.elapsed() >= timeout {
+            if let Ok(mut child_guard) = job.child.lock() {
+                if let Some(child) = child_guard.as_mut() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+            break Err(AppError::Message(timeout_message.into()));
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    };
+
+    let stdout = stdout_thread
+        .map(|thread| thread.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr = stderr_thread
+        .map(|thread| thread.join().unwrap_or_default())
+        .unwrap_or_default();
+    let status = status_result?;
 
     Ok(TimedOutput {
         status,
@@ -1140,14 +1366,67 @@ pub fn clear_engine_registration(
     get_engine_statuses(app)
 }
 
-fn decode_data_url(data_url: &str) -> AppResult<Vec<u8>> {
-    let (_, encoded) = data_url
+pub fn cancel_enhancement_jobs(app: &AppHandle, reader_session_id: &str) -> AppResult<()> {
+    let jobs_to_cancel = {
+        let enhancement_jobs = app.state::<EnhancementJobs>();
+        let mut jobs = lock_enhancement_jobs(&enhancement_jobs)?;
+        remember_canceled_reader_session(&mut jobs, reader_session_id);
+
+        let job_ids = jobs
+            .running
+            .iter()
+            .filter_map(|(job_id, job)| {
+                if job.reader_session_id == reader_session_id {
+                    Some(job_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        job_ids
+            .into_iter()
+            .filter_map(|job_id| jobs.running.remove(&job_id))
+            .collect::<Vec<_>>()
+    };
+
+    for job in jobs_to_cancel {
+        job.canceled.store(true, Ordering::SeqCst);
+
+        let Ok(mut child_guard) = job.child.lock() else {
+            continue;
+        };
+
+        let Some(child) = child_guard.as_mut() else {
+            continue;
+        };
+
+        if child.try_wait()?.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    Ok(())
+}
+
+fn decode_data_url(data_url: &str) -> AppResult<(Vec<u8>, String)> {
+    let (metadata, encoded) = data_url
         .split_once(',')
         .ok_or_else(|| AppError::Message("画像データ URL の形式が不正です。".into()))?;
 
-    BASE64_STANDARD
+    let mime_type = metadata
+        .strip_prefix("data:")
+        .and_then(|value| value.split(';').next())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("image/png")
+        .to_string();
+
+    let bytes = BASE64_STANDARD
         .decode(encoded)
-        .map_err(|error| AppError::Message(format!("画像データの復号に失敗しました: {error}")))
+        .map_err(|error| AppError::Message(format!("画像データの復号に失敗しました: {error}")))?;
+
+    Ok((bytes, mime_type))
 }
 
 fn encode_png_data_url(bytes: &[u8]) -> String {
@@ -1161,26 +1440,42 @@ fn load_engine_registration(app: &AppHandle, engine_id: EngineId) -> AppResult<E
         .lock()
         .map_err(|_| AppError::Message("AI エンジン設定の排他制御に失敗しました。".into()))?;
     let registry = load_registry(app)?;
-    registry.engines.get(&engine_id).cloned().ok_or_else(|| {
-        AppError::Message("選択した AI エンジンはまだ登録されていません。".into())
-    })
+    registry
+        .engines
+        .get(&engine_id)
+        .cloned()
+        .ok_or_else(|| AppError::Message("選択した AI エンジンはまだ登録されていません。".into()))
+}
+
+fn input_extension_for_mime(mime_type: &str) -> &'static str {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/bmp" => "bmp",
+        _ => "png",
+    }
 }
 
 fn run_enhancement_command(
     app: &AppHandle,
     engine_id: EngineId,
     scale: u8,
-    image_data_url: &str,
+    image_bytes: &[u8],
+    mime_type: &str,
+    job: Option<&EnhancementJobContext>,
 ) -> AppResult<Vec<u8>> {
     let registration = load_engine_registration(app, engine_id)?;
 
     let temp_dir = tempdir()?;
-    let input_path = temp_dir.path().join("input.png");
+    let input_path = temp_dir
+        .path()
+        .join(format!("input.{}", input_extension_for_mime(mime_type)));
     let output_path = temp_dir.path().join("output.png");
-    fs::write(&input_path, decode_data_url(image_data_url)?)?;
+    fs::write(&input_path, image_bytes)?;
 
     let mut command = Command::new(&registration.executable_path);
-    command
+    hide_command_window(&mut command)
         .current_dir(
             Path::new(&registration.executable_path)
                 .parent()
@@ -1243,11 +1538,20 @@ fn run_enhancement_command(
         }
     }
 
-    let output = run_command_with_timeout(
-        &mut command,
-        Duration::from_secs(120),
-        "AI エンジンの処理がタイムアウトしました。",
-    )?;
+    let output = if let Some(job) = job {
+        run_cancellable_command_with_timeout(
+            &mut command,
+            Duration::from_secs(120),
+            "AI エンジンの処理がタイムアウトしました。",
+            job,
+        )?
+    } else {
+        run_command_with_timeout(
+            &mut command,
+            Duration::from_secs(120),
+            "AI エンジンの処理がタイムアウトしました。",
+        )?
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1295,6 +1599,7 @@ fn enhanced_image_cache_path(
     engine_id: EngineId,
     scale: u8,
     image_hash: &str,
+    create_dir: bool,
 ) -> AppResult<PathBuf> {
     let book_id = normalize_book_id(book_id)?;
     let image_hash = normalize_image_hash(image_hash)?;
@@ -1304,19 +1609,35 @@ fn enhanced_image_cache_path(
         .join(engine_id.as_str())
         .join(scale.to_string());
 
-    fs::create_dir_all(&cache_dir)?;
+    if create_dir {
+        fs::create_dir_all(&cache_dir)?;
+    }
+
     Ok(cache_dir.join(format!("{image_hash}.png")))
+}
+
+pub fn enhanced_image_cache_exists(
+    app: &AppHandle,
+    book_id: &str,
+    engine_id: EngineId,
+    scale: u8,
+    image_hash: &str,
+) -> AppResult<bool> {
+    Ok(enhanced_image_cache_path(app, book_id, engine_id, scale, image_hash, false)?.is_file())
 }
 
 pub fn enhance_image(
     app: &AppHandle,
     request: EnhanceImageRequest,
 ) -> AppResult<EnhanceImageResponse> {
+    let (image_bytes, mime_type) = decode_data_url(&request.image_data_url)?;
     let enhanced_bytes = run_enhancement_command(
         app,
         request.engine_id,
         request.scale,
-        &request.image_data_url,
+        &image_bytes,
+        &mime_type,
+        None,
     )?;
 
     Ok(EnhanceImageResponse {
@@ -1328,21 +1649,19 @@ pub fn enhance_book_image(
     app: &AppHandle,
     request: EnhanceBookImageRequest,
 ) -> AppResult<EnhanceBookImageResponse> {
+    validate_enhancement_job_identity(&request.job_id, &request.reader_session_id)?;
+    ensure_reader_session_not_canceled(app, &request.reader_session_id)?;
+    let (image_bytes, mime_type) = decode_data_url(&request.image_data_url)?;
+    let image_hash = crate::services::library::image_sha256_hex(&image_bytes);
+
     let cache_path = enhanced_image_cache_path(
         app,
         &request.book_id,
         request.engine_id,
         request.scale,
-        &request.image_hash,
+        &image_hash,
+        false,
     )?;
-    decode_data_url(&request.image_data_url)?;
-
-    let enhancement_lock = app.state::<EnhancementLock>();
-    let _guard = enhancement_lock
-        .0
-        .lock()
-        .map_err(|_| AppError::Message("AI 画像キャッシュの排他制御に失敗しました。".into()))?;
-
     if cache_path.is_file() {
         let cached_bytes = fs::read(cache_path)?;
         return Ok(EnhanceBookImageResponse {
@@ -1351,17 +1670,212 @@ pub fn enhance_book_image(
         });
     }
 
-    let enhanced_bytes = run_enhancement_command(
+    if let Ok(legacy_cache_path) = enhanced_image_cache_path(
         app,
+        &request.book_id,
         request.engine_id,
         request.scale,
-        &request.image_data_url,
+        &request.image_hash,
+        false,
+    ) {
+        if legacy_cache_path.is_file() {
+            let cached_bytes = fs::read(legacy_cache_path)?;
+            let raw_cache_path = enhanced_image_cache_path(
+                app,
+                &request.book_id,
+                request.engine_id,
+                request.scale,
+                &image_hash,
+                true,
+            )?;
+            fs::write(raw_cache_path, &cached_bytes)?;
+            return Ok(EnhanceBookImageResponse {
+                cache_hit: true,
+                image_data_url: encode_png_data_url(&cached_bytes),
+            });
+        }
+    }
+
+    let job = register_enhancement_job(app, &request.job_id, &request.reader_session_id)?;
+    let result = (|| -> AppResult<EnhanceBookImageResponse> {
+        let enhancement_lock = app.state::<EnhancementLock>();
+        let _guard = enhancement_lock
+            .0
+            .lock()
+            .map_err(|_| AppError::Message("AI 画像キャッシュの排他制御に失敗しました。".into()))?;
+
+        if job.canceled.load(Ordering::SeqCst) {
+            return Err(enhancement_canceled_error());
+        }
+
+        if cache_path.is_file() {
+            let cached_bytes = fs::read(cache_path)?;
+            return Ok(EnhanceBookImageResponse {
+                cache_hit: true,
+                image_data_url: encode_png_data_url(&cached_bytes),
+            });
+        }
+
+        if let Ok(legacy_cache_path) = enhanced_image_cache_path(
+            app,
+            &request.book_id,
+            request.engine_id,
+            request.scale,
+            &request.image_hash,
+            false,
+        ) {
+            if legacy_cache_path.is_file() {
+                let cached_bytes = fs::read(legacy_cache_path)?;
+                let raw_cache_path = enhanced_image_cache_path(
+                    app,
+                    &request.book_id,
+                    request.engine_id,
+                    request.scale,
+                    &image_hash,
+                    true,
+                )?;
+                fs::write(raw_cache_path, &cached_bytes)?;
+                return Ok(EnhanceBookImageResponse {
+                    cache_hit: true,
+                    image_data_url: encode_png_data_url(&cached_bytes),
+                });
+            }
+        }
+
+        let cache_path = enhanced_image_cache_path(
+            app,
+            &request.book_id,
+            request.engine_id,
+            request.scale,
+            &image_hash,
+            true,
+        )?;
+        let enhanced_bytes = run_enhancement_command(
+            app,
+            request.engine_id,
+            request.scale,
+            &image_bytes,
+            &mime_type,
+            Some(&job),
+        )?;
+
+        fs::write(&cache_path, &enhanced_bytes)?;
+
+        Ok(EnhanceBookImageResponse {
+            cache_hit: false,
+            image_data_url: encode_png_data_url(&enhanced_bytes),
+        })
+    })();
+
+    finish_enhancement_job(app, &job.job_id);
+    result
+}
+
+pub fn enhance_book_asset_image(
+    app: &AppHandle,
+    request: EnhanceBookAssetImageRequest,
+) -> AppResult<EnhanceBookAssetImageResponse> {
+    validate_enhancement_job_identity(&request.job_id, &request.reader_session_id)?;
+    ensure_reader_session_not_canceled(app, &request.reader_session_id)?;
+    let image_hash = normalize_image_hash(&request.image_hash)?;
+    let asset_path = crate::services::library::normalize_epub_asset_path(&request.asset_path)?;
+
+    let cache_path = enhanced_image_cache_path(
+        app,
+        &request.book_id,
+        request.engine_id,
+        request.scale,
+        &image_hash,
+        false,
+    )?;
+    if cache_path.is_file() {
+        return Ok(EnhanceBookAssetImageResponse {
+            image_hash,
+            cache_hit: true,
+        });
+    }
+
+    let job = register_enhancement_job(app, &request.job_id, &request.reader_session_id)?;
+    let result = (|| -> AppResult<EnhanceBookAssetImageResponse> {
+        let (_, mime_type, image_bytes) =
+            crate::services::library::read_book_asset_image_bytes(app, &request.book_id, &asset_path)?;
+        let actual_hash = crate::services::library::image_sha256_hex(&image_bytes);
+        if actual_hash != image_hash {
+            return Err(AppError::Message(
+                "EPUB 画像のハッシュがリクエストと一致しません。".into(),
+            ));
+        }
+
+        let enhancement_lock = app.state::<EnhancementLock>();
+        let _guard = enhancement_lock
+            .0
+            .lock()
+            .map_err(|_| AppError::Message("AI 画像キャッシュの排他制御に失敗しました。".into()))?;
+
+        if job.canceled.load(Ordering::SeqCst) {
+            return Err(enhancement_canceled_error());
+        }
+
+        let cache_path = enhanced_image_cache_path(
+            app,
+            &request.book_id,
+            request.engine_id,
+            request.scale,
+            &image_hash,
+            false,
+        )?;
+        if cache_path.is_file() {
+            return Ok(EnhanceBookAssetImageResponse {
+                image_hash,
+                cache_hit: true,
+            });
+        }
+
+        let enhanced_bytes = run_enhancement_command(
+            app,
+            request.engine_id,
+            request.scale,
+            &image_bytes,
+            &mime_type,
+            Some(&job),
+        )?;
+        let cache_path = enhanced_image_cache_path(
+            app,
+            &request.book_id,
+            request.engine_id,
+            request.scale,
+            &image_hash,
+            true,
+        )?;
+        fs::write(cache_path, &enhanced_bytes)?;
+
+        Ok(EnhanceBookAssetImageResponse {
+            image_hash,
+            cache_hit: false,
+        })
+    })();
+
+    finish_enhancement_job(app, &job.job_id);
+    result
+}
+
+pub fn read_enhanced_book_image(
+    app: &AppHandle,
+    request: ReadEnhancedBookImageRequest,
+) -> AppResult<Option<String>> {
+    let cache_path = enhanced_image_cache_path(
+        app,
+        &request.book_id,
+        request.engine_id,
+        request.scale,
+        &request.image_hash,
+        false,
     )?;
 
-    fs::write(&cache_path, &enhanced_bytes)?;
+    if !cache_path.is_file() {
+        return Ok(None);
+    }
 
-    Ok(EnhanceBookImageResponse {
-        cache_hit: false,
-        image_data_url: encode_png_data_url(&enhanced_bytes),
-    })
+    let cached_bytes = fs::read(cache_path)?;
+    Ok(Some(encode_png_data_url(&cached_bytes)))
 }

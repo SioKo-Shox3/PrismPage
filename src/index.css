@@ -283,6 +283,10 @@ img {
   margin-bottom: 18px;
 }
 
+.app-toast-stack[hidden] {
+  display: none;
+}
+
 .app-toast-stack.is-reader {
   position: fixed;
   top: 18px;
@@ -535,6 +539,27 @@ img {
   gap: 14px;
 }
 
+.update-progress {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.update-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-soft);
+}
+
+.update-progress-track div {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 160ms ease;
+}
+
 .update-checker-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -552,6 +577,39 @@ img {
 .update-checker-meta strong {
   overflow-wrap: anywhere;
   font-size: 1.2rem;
+}
+
+.update-release-notes {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.update-release-notes p {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+}
+
+.update-toast-card {
+  display: grid;
+  gap: 10px;
+}
+
+.update-toast-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.update-toast-copy span {
+  color: var(--text);
+}
+
+.update-toast-actions {
+  justify-content: flex-end;
 }
 
 .installer-list {
@@ -737,10 +795,22 @@ img {
 }
 
 .message-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px 14px;
   border-radius: 16px;
   border: 1px solid var(--border);
   background: var(--bg-soft);
+}
+
+.message-strip.update-toast-card {
+  display: grid;
+}
+
+.message-strip > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .message-strip.is-error {

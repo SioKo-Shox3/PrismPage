@@ -92,6 +92,7 @@ pub fn run() {
         .manage(state::OpenedEpubPaths::default())
         .manage(state::RegistryLock::default())
         .manage(state::EnhancementLock::default())
+        .manage(state::EnhancementJobs::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let cwd = PathBuf::from(cwd);
             focus_main_window(app);
@@ -99,6 +100,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let cwd = std::env::current_dir().ok();
             store_and_emit_opened_epubs(
@@ -128,6 +131,10 @@ pub fn run() {
             commands::engines::clear_engine_registration,
             commands::engines::enhance_image,
             commands::engines::enhance_book_image,
+            commands::engines::scan_book_images,
+            commands::engines::enhance_book_asset_image,
+            commands::engines::read_enhanced_book_image,
+            commands::engines::cancel_enhancement_jobs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

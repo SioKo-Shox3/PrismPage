@@ -12,12 +12,14 @@ export function SettingsPage() {
     enhancementEnabled,
     fontScale,
     lineHeight,
+    precomputeBookImages,
     preferredEngine,
     setAutoEnhanceZoomedImage,
     setAutoEnhanceVisibleImages,
     setEnhancementEnabled,
     setFontScale,
     setLineHeight,
+    setPrecomputeBookImages,
     setPreferredEngine,
     setTheme,
     setZoomEnhancementScale,
@@ -31,7 +33,7 @@ export function SettingsPage() {
         <div>
           <span className="eyebrow">Settings</span>
           <h1>読書設定</h1>
-          <p>表示、AI 自動適用、既定エンジンをまとめて調整します。</p>
+          <p>表示、バックグラウンド高精細化、既定エンジンをまとめて調整します。</p>
         </div>
       </header>
 
@@ -111,8 +113,8 @@ export function SettingsPage() {
             <div className="setting-item-header">
               <ImageUpscale size={18} />
               <div>
-                <h3>AI 自動適用</h3>
-                <p>表示中の画像へ選択中エンジンを自動で適用します。</p>
+                <h3>バックグラウンド高精細化</h3>
+                <p>元画像で読みながら、読書を邪魔しない速度で全ページを高精細化します。</p>
               </div>
             </div>
 
@@ -140,6 +142,19 @@ export function SettingsPage() {
             </label>
 
             <label className="field-label">
+              全ページの事前処理
+              <select
+                value={precomputeBookImages ? 'precompute' : 'visible'}
+                onChange={(event) =>
+                  setPrecomputeBookImages(event.target.value === 'precompute')
+                }
+              >
+                <option value="precompute">読書優先で実行</option>
+                <option value="visible">開いたページだけ</option>
+              </select>
+            </label>
+
+            <label className="field-label">
               読書中の表示画像
               <select
                 value={autoEnhanceVisibleImages ? 'auto' : 'off'}
@@ -147,7 +162,7 @@ export function SettingsPage() {
                   setAutoEnhanceVisibleImages(event.target.value === 'auto')
                 }
               >
-                <option value="auto">自動で高精細化</option>
+                <option value="auto">完了した画像から差し替え</option>
                 <option value="off">元画像のまま</option>
               </select>
             </label>
@@ -160,7 +175,7 @@ export function SettingsPage() {
                   setAutoEnhanceZoomedImage(event.target.value === 'auto')
                 }
               >
-                <option value="auto">自動実行</option>
+                <option value="auto">アイドル時に自動実行</option>
                 <option value="manual">手動実行</option>
               </select>
             </label>

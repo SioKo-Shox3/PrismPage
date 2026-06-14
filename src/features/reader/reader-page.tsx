@@ -17,8 +17,22 @@ import { useLibraryStore } from '@/features/library/book-store'
 import { useSettingsStore } from '@/features/settings/settings-store'
 import { base64ToArrayBuffer, flattenNavigation } from '@/lib/epub'
 import { getEngineLabel } from '@/lib/engines'
-import { enhanceBookImage, getEngineStatuses, readBookBase64 } from '@/lib/tauri'
-import type { EngineId, EngineStatus } from '@/types/app'
+import {
+  cancelEnhancementJobs,
+  enhanceBookAssetImage,
+  enhanceBookImage,
+  getEngineStatuses,
+  readBookBase64,
+  readEnhancedBookImage,
+  scanBookImages,
+} from '@/lib/tauri'
+import type { EngineId, EngineStatus, ScannedBookImage } from '@/types/app'
+
+const AUTO_ENHANCE_IDLE_DELAY_MS = 1500
+const ENHANCED_IMAGE_MEMORY_CACHE_LIMIT = 8
+const XLINK_NS = 'http://www.w3.org/1999/xlink'
+
+type ReaderImageElement = HTMLImageElement | SVGImageElement
 
 interface ZoomedImageState {
   bookId: string
@@ -26,6 +40,7 @@ interface ZoomedImageState {
   imageHash: string
   enhancedDataUrl?: string
   caption: string
+  readerSessionId: string
   sessionId: number
 }
 
@@ -36,28 +51,38 @@ interface AutoEnhanceStatus {
   tone: AutoEnhanceTone
 }
 
-interface AutoEnhanceQueueItem {
-  bookId: string
-  dataUrl: string
-  document: Document
-  image: HTMLImageElement
-  imageHash: string
-  originalInfo: OriginalImageInfo
-  renderToken: number
-  sessionId: number
-}
-
 interface OriginalImageInfo {
   dataUrl: string
   imageHash: string
 }
 
 interface AutoEnhanceSettings {
+  autoEnhanceZoomedImage: boolean
   autoEnhanceVisibleImages: boolean
   engineReady: boolean
   enhancementEnabled: boolean
+  precomputeBookImages: boolean
   preferredEngine: EngineId
   zoomEnhancementScale: number
+}
+
+interface BookEnhancementQueueItem {
+  image: ScannedBookImage
+  priority: 'visible' | 'precompute'
+}
+
+function createClientId(prefix: string) {
+  const cryptoApi = typeof window !== 'undefined' ? window.crypto : undefined
+  const randomId =
+    cryptoApi?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+  return `${prefix}-${randomId}`
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
 }
 
 function blobToDataUrl(blob: Blob) {
@@ -69,27 +94,83 @@ function blobToDataUrl(blob: Blob) {
   })
 }
 
-async function imageElementToDataUrl(image: HTMLImageElement) {
-  const source = image.currentSrc || image.src
+function isSvgImageElement(image: ReaderImageElement): image is SVGImageElement {
+  return image.namespaceURI === 'http://www.w3.org/2000/svg' && image.localName === 'image'
+}
+
+function getImageSource(image: ReaderImageElement) {
+  if (isSvgImageElement(image)) {
+    return (
+      image.href.baseVal ||
+      image.getAttribute('href') ||
+      image.getAttributeNS(XLINK_NS, 'href') ||
+      image.getAttribute('xlink:href') ||
+      ''
+    )
+  }
+
+  return image.currentSrc || image.src
+}
+
+function setImageSource(image: ReaderImageElement, dataUrl: string) {
+  if (isSvgImageElement(image)) {
+    image.setAttribute('href', dataUrl)
+    image.setAttributeNS(XLINK_NS, 'xlink:href', dataUrl)
+    return
+  }
+
+  image.removeAttribute('srcset')
+  image.src = dataUrl
+}
+
+function getImageCaption(image: ReaderImageElement) {
+  if (isSvgImageElement(image)) {
+    return image.getAttribute('aria-label') || image.getAttribute('title') || 'EPUB image'
+  }
+
+  return image.alt || 'EPUB image'
+}
+
+function getImageDataAttribute(image: ReaderImageElement, key: string) {
+  return (image as ReaderImageElement & { dataset?: DOMStringMap }).dataset?.[key]
+}
+
+function setImageDataAttribute(image: ReaderImageElement, key: string, value: string) {
+  const dataset = (image as ReaderImageElement & { dataset?: DOMStringMap }).dataset
+
+  if (dataset) {
+    dataset[key] = value
+    return
+  }
+
+  image.setAttribute(`data-${key.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)}`, value)
+}
+
+function getReaderImageElements(document: Document) {
+  return Array.from(document.querySelectorAll('img, svg image')) as ReaderImageElement[]
+}
+
+async function imageElementToBlob(image: ReaderImageElement) {
+  const source = getImageSource(image)
 
   if (!source) {
     throw new Error('画像の参照先が見つかりません。')
   }
 
-  if (source.startsWith('data:')) {
-    return source
-  }
-
-  const response = await fetch(source)
+  const sourceUrl =
+    source.startsWith('data:') || source.startsWith('blob:')
+      ? source
+      : new URL(source, image.ownerDocument.baseURI).toString()
+  const response = await fetch(sourceUrl)
 
   if (!response.ok) {
     throw new Error('画像の取得に失敗しました。')
   }
 
-  return blobToDataUrl(await response.blob())
+  return response.blob()
 }
 
-function fallbackHash(value: string) {
+function fallbackHashBytes(bytes: Uint8Array) {
   const states = [
     0x811c9dc5,
     0x85ebca6b,
@@ -101,16 +182,15 @@ function fallbackHash(value: string) {
     0xb55a4f09,
   ]
 
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
+  for (let index = 0; index < bytes.length; index += 1) {
     const slot = index % states.length
-    const mixed = states[slot] ^ (code + index + value.length)
+    const mixed = states[slot] ^ (bytes[index] + index + bytes.length)
     states[slot] = Math.imul(mixed, 0x45d9f3b) ^ (mixed >>> 16)
   }
 
   return states
     .map((state, index) =>
-      ((state ^ Math.imul(value.length + index, 0x9e3779b1)) >>> 0)
+      ((state ^ Math.imul(bytes.length + index, 0x9e3779b1)) >>> 0)
         .toString(16)
         .slice(-8)
         .padStart(8, '0'),
@@ -118,22 +198,21 @@ function fallbackHash(value: string) {
     .join('')
 }
 
-async function hashDataUrl(dataUrl: string) {
+async function hashArrayBuffer(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer)
+
   if (!window.crypto?.subtle) {
-    return fallbackHash(dataUrl)
+    return fallbackHashBytes(bytes)
   }
 
   try {
-    const digest = await window.crypto.subtle.digest(
-      'SHA-256',
-      new TextEncoder().encode(dataUrl),
-    )
+    const digest = await window.crypto.subtle.digest('SHA-256', buffer)
 
     return Array.from(new Uint8Array(digest))
       .map((byte) => byte.toString(16).padStart(2, '0'))
       .join('')
   } catch {
-    return fallbackHash(dataUrl)
+    return fallbackHashBytes(bytes)
   }
 }
 
@@ -141,7 +220,7 @@ function buildEnhanceKey(imageHash: string, engineId: EngineId, scale: number) {
   return `${imageHash}:${engineId}:${scale}`
 }
 
-function isVisibleImage(image: HTMLImageElement) {
+function isVisibleImage(image: ReaderImageElement) {
   const view = image.ownerDocument.defaultView
 
   if (!view || !image.isConnected) {
@@ -163,10 +242,10 @@ function isVisibleImage(image: HTMLImageElement) {
 }
 
 function applyEnhancedImage(
-  image: HTMLImageElement,
+  image: ReaderImageElement,
   dataUrl: string,
   originalInfo: OriginalImageInfo,
-  originalImageInfoMap: WeakMap<HTMLImageElement, OriginalImageInfo>,
+  originalImageInfoMap: WeakMap<ReaderImageElement, OriginalImageInfo>,
   cacheKey?: string,
 ) {
   if (!image.isConnected) {
@@ -174,13 +253,12 @@ function applyEnhancedImage(
   }
 
   originalImageInfoMap.set(image, originalInfo)
-  image.dataset.prismpageEnhanced = 'true'
+  setImageDataAttribute(image, 'prismpageEnhanced', 'true')
   if (cacheKey) {
-    image.dataset.prismpageEnhancedKey = cacheKey
+    setImageDataAttribute(image, 'prismpageEnhancedKey', cacheKey)
   }
-  image.dataset.prismpageOriginalHash = originalInfo.imageHash
-  image.removeAttribute('srcset')
-  image.src = dataUrl
+  setImageDataAttribute(image, 'prismpageOriginalHash', originalInfo.imageHash)
+  setImageSource(image, dataUrl)
 }
 
 export function ReaderPage() {
@@ -197,6 +275,7 @@ export function ReaderPage() {
     enhancementEnabled,
     fontScale,
     lineHeight,
+    precomputeBookImages,
     preferredEngine,
     zoomEnhancementScale,
   } = useSettingsStore()
@@ -211,22 +290,37 @@ export function ReaderPage() {
   const [zoomedImage, setZoomedImage] = useState<ZoomedImageState | null>(null)
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [readerReady, setReaderReady] = useState(false)
+  const [idleGenerationSnapshot, setIdleGenerationSnapshot] = useState(0)
   const [autoEnhanceStatus, setAutoEnhanceStatus] = useState<AutoEnhanceStatus>({
-    message: 'AI 自動適用を準備しています。',
+    message: '元画像を表示しています。',
     tone: 'idle',
   })
   const initialLocationRef = useRef<string | undefined>(book?.currentLocation)
-  const autoQueueRef = useRef<AutoEnhanceQueueItem[]>([])
-  const autoProcessingRef = useRef(false)
-  const autoProcessingSessionRef = useRef<number | null>(null)
   const activeBookIdRef = useRef<string | undefined>(undefined)
+  const readerInstanceIdRef = useRef(createClientId('reader'))
   const readerSessionRef = useRef(0)
+  const currentReaderSessionIdRef = useRef<string | null>(null)
+  const currentEnhancementGroupIdRef = useRef<string | null>(null)
   const currentReaderDocumentRef = useRef<Document | null>(null)
   const currentRenderTokenRef = useRef(0)
+  const documentActivityCleanupRef = useRef<(() => void) | null>(null)
+  const idleTimerRef = useRef<number | undefined>(undefined)
+  const idleGenerationRef = useRef(0)
+  const lastReaderActivityAtRef = useRef(0)
+  const bookImageManifestRef = useRef<ScannedBookImage[]>([])
+  const bookImageByHashRef = useRef(new Map<string, ScannedBookImage>())
+  const bookImageCachedHashesRef = useRef(new Set<string>())
+  const bookImageFailedHashesRef = useRef(new Set<string>())
+  const bookImageQueuedHashesRef = useRef(new Set<string>())
+  const bookImageQueueRef = useRef<BookEnhancementQueueItem[]>([])
+  const bookImageProcessingRunIdRef = useRef<string | null>(null)
+  const bookImageScanTokenRef = useRef(0)
+  const processBookImageQueueRef = useRef<(runId: string) => void>(() => undefined)
   const inFlightEnhancementsRef = useRef(new Set<string>())
-  const originalImageInfoRef = useRef(new WeakMap<HTMLImageElement, OriginalImageInfo>())
-  const processedEnhancementsRef = useRef(new Set<string>())
+  const originalImageInfoRef = useRef(new WeakMap<ReaderImageElement, OriginalImageInfo>())
   const enhancedImageCacheRef = useRef(new Map<string, string>())
+  const enhancedImageCacheOrderRef = useRef<string[]>([])
+  const zoomedImageRef = useRef<ZoomedImageState | null>(null)
   const currentBookId = book?.id
 
   const currentEngineStatus = useMemo(
@@ -235,9 +329,11 @@ export function ReaderPage() {
   )
 
   const autoEnhanceSettingsRef = useRef<AutoEnhanceSettings>({
+    autoEnhanceZoomedImage,
     autoEnhanceVisibleImages,
     engineReady: Boolean(currentEngineStatus?.ready),
     enhancementEnabled,
+    precomputeBookImages,
     preferredEngine,
     zoomEnhancementScale,
   })
@@ -264,514 +360,865 @@ export function ReaderPage() {
     })
   }, [fontScale, lineHeight])
 
-  const isCurrentReaderSession = useCallback((sessionId: number, bookId: string) => {
-    return readerSessionRef.current === sessionId && activeBookIdRef.current === bookId
+  const buildReaderSessionId = useCallback((sessionId: number, targetBookId: string) => {
+    return `${readerInstanceIdRef.current}:${targetBookId}:${sessionId}`
   }, [])
 
+  const buildBookEnhancementRunId = useCallback(
+    (readerSessionId: string, engineId: EngineId, scale: number) => {
+      return `${readerSessionId}:book-enhance:${engineId}:x${scale}:${createClientId('run')}`
+    },
+    [],
+  )
+
+  const cancelEnhancementsForGroup = useCallback((enhancementGroupId: string | null) => {
+    if (!enhancementGroupId) {
+      return
+    }
+
+    void cancelEnhancementJobs(enhancementGroupId).catch(() => undefined)
+  }, [])
+
+  const isCurrentReaderSession = useCallback((sessionId: number, targetBookId: string) => {
+    return readerSessionRef.current === sessionId && activeBookIdRef.current === targetBookId
+  }, [])
+
+  const isCurrentReaderSessionKey = useCallback(
+    (sessionId: number, targetBookId: string, readerSessionId: string) => {
+      return (
+        isCurrentReaderSession(sessionId, targetBookId) &&
+        currentReaderSessionIdRef.current === readerSessionId
+      )
+    },
+    [isCurrentReaderSession],
+  )
+
   const setAutoEnhanceStatusForSession = useCallback(
-    (sessionId: number, bookId: string, status: AutoEnhanceStatus) => {
-      if (isCurrentReaderSession(sessionId, bookId)) {
+    (sessionId: number, targetBookId: string, status: AutoEnhanceStatus) => {
+      if (isCurrentReaderSession(sessionId, targetBookId)) {
         setAutoEnhanceStatus(status)
       }
     },
     [isCurrentReaderSession],
   )
 
-  const cleanupQueueForDocument = useCallback((document: Document | null) => {
-    if (!document) {
-      autoQueueRef.current = []
-      return
-    }
-
-    const renderToken = currentRenderTokenRef.current
-    const sessionId = readerSessionRef.current
-    const bookId = activeBookIdRef.current
-    autoQueueRef.current = autoQueueRef.current.filter(
-      (item) =>
-        item.sessionId === sessionId &&
-        item.bookId === bookId &&
-        item.document === document &&
-        item.renderToken === renderToken &&
-        item.image.isConnected &&
-        isVisibleImage(item.image),
-    )
+  const resetBookEnhancementState = useCallback(() => {
+    bookImageManifestRef.current = []
+    bookImageByHashRef.current = new Map<string, ScannedBookImage>()
+    bookImageCachedHashesRef.current = new Set<string>()
+    bookImageFailedHashesRef.current = new Set<string>()
+    bookImageQueuedHashesRef.current = new Set<string>()
+    bookImageQueueRef.current = []
+    inFlightEnhancementsRef.current.clear()
+    enhancedImageCacheRef.current.clear()
+    enhancedImageCacheOrderRef.current = []
+    bookImageScanTokenRef.current += 1
   }, [])
 
-  const prepareOriginalImageInfo = useCallback(async (image: HTMLImageElement) => {
+  const rememberEnhancedImageDataUrl = useCallback((cacheKey: string, dataUrl: string) => {
+    enhancedImageCacheRef.current.set(cacheKey, dataUrl)
+    enhancedImageCacheOrderRef.current = [
+      cacheKey,
+      ...enhancedImageCacheOrderRef.current.filter((key) => key !== cacheKey),
+    ].slice(0, ENHANCED_IMAGE_MEMORY_CACHE_LIMIT)
+
+    for (const key of Array.from(enhancedImageCacheRef.current.keys())) {
+      if (!enhancedImageCacheOrderRef.current.includes(key)) {
+        enhancedImageCacheRef.current.delete(key)
+      }
+    }
+  }, [])
+
+  const prepareOriginalImageInfo = useCallback(async (image: ReaderImageElement) => {
     const existingInfo = originalImageInfoRef.current.get(image)
 
     if (existingInfo) {
       return existingInfo
     }
 
-    const dataUrl = await imageElementToDataUrl(image)
-    const imageHash = await hashDataUrl(dataUrl)
+    const blob = await imageElementToBlob(image)
+    const imageHash = await hashArrayBuffer(await blob.arrayBuffer())
+    const dataUrl = await blobToDataUrl(blob)
     const originalInfo = { dataUrl, imageHash }
     originalImageInfoRef.current.set(image, originalInfo)
-    image.dataset.prismpageOriginalHash = imageHash
+    setImageDataAttribute(image, 'prismpageOriginalHash', imageHash)
 
     return originalInfo
   }, [])
 
-  const processAutoEnhanceQueue = useCallback(async () => {
-    const sessionId = readerSessionRef.current
-    const bookId = activeBookIdRef.current
+  const readEnhancedImageForDisplay = useCallback(
+    async (targetBookId: string, engineId: EngineId, scale: number, imageHash: string) => {
+      const cacheKey = buildEnhanceKey(imageHash, engineId, scale)
+      const memoryCached = enhancedImageCacheRef.current.get(cacheKey)
 
-    if (!bookId) {
-      return
+      if (memoryCached) {
+        bookImageCachedHashesRef.current.add(imageHash)
+        return memoryCached
+      }
+
+      const dataUrl = await readEnhancedBookImage({
+        bookId: targetBookId,
+        engineId,
+        imageHash,
+        scale,
+      })
+
+      if (dataUrl) {
+        rememberEnhancedImageDataUrl(cacheKey, dataUrl)
+        bookImageCachedHashesRef.current.add(imageHash)
+      }
+
+      return dataUrl
+    },
+    [rememberEnhancedImageDataUrl],
+  )
+
+  const applyCachedEnhancedImageToVisibleHash = useCallback(
+    async (
+      targetBookId: string,
+      engineId: EngineId,
+      scale: number,
+      imageHash: string,
+      runId: string,
+    ) => {
+      const sessionId = readerSessionRef.current
+      const readerSessionId = currentReaderSessionIdRef.current
+      const document = currentReaderDocumentRef.current
+      const renderToken = currentRenderTokenRef.current
+      const settings = autoEnhanceSettingsRef.current
+
+      if (
+        !readerSessionId ||
+        !document ||
+        !settings.autoEnhanceVisibleImages ||
+        currentEnhancementGroupIdRef.current !== runId
+      ) {
+        return false
+      }
+
+      const matches: Array<{ image: ReaderImageElement; originalInfo: OriginalImageInfo }> = []
+
+      for (const image of getReaderImageElements(document).filter(isVisibleImage)) {
+        const originalInfo = await prepareOriginalImageInfo(image)
+
+        if (
+          !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
+          currentEnhancementGroupIdRef.current !== runId ||
+          document !== currentReaderDocumentRef.current ||
+          renderToken !== currentRenderTokenRef.current
+        ) {
+          return false
+        }
+
+        if (originalInfo.imageHash === imageHash) {
+          matches.push({ image, originalInfo })
+        }
+      }
+
+      if (matches.length === 0) {
+        return false
+      }
+
+      const dataUrl = await readEnhancedImageForDisplay(targetBookId, engineId, scale, imageHash)
+
+      if (
+        !dataUrl ||
+        !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
+        currentEnhancementGroupIdRef.current !== runId ||
+        document !== currentReaderDocumentRef.current ||
+        renderToken !== currentRenderTokenRef.current
+      ) {
+        return false
+      }
+
+      const cacheKey = buildEnhanceKey(imageHash, engineId, scale)
+      let applied = false
+
+      for (const { image, originalInfo } of matches) {
+        if (!image.isConnected || getImageDataAttribute(image, 'prismpageEnhancedKey') === cacheKey) {
+          continue
+        }
+
+        applyEnhancedImage(
+          image,
+          dataUrl,
+          originalInfo,
+          originalImageInfoRef.current,
+          cacheKey,
+        )
+        applied = true
+      }
+
+      if (applied) {
+        setZoomedImage((current) =>
+          current?.bookId === targetBookId && current.imageHash === imageHash
+            ? { ...current, enhancedDataUrl: dataUrl }
+            : current,
+        )
+      }
+
+      return applied
+    },
+    [isCurrentReaderSessionKey, prepareOriginalImageInfo, readEnhancedImageForDisplay],
+  )
+
+  const enqueueBookImage = useCallback((image: ScannedBookImage, priority: 'visible' | 'precompute') => {
+    const settings = autoEnhanceSettingsRef.current
+    const cacheKey = buildEnhanceKey(image.imageHash, settings.preferredEngine, settings.zoomEnhancementScale)
+
+    if (
+      bookImageCachedHashesRef.current.has(image.imageHash) ||
+      bookImageFailedHashesRef.current.has(image.imageHash) ||
+      inFlightEnhancementsRef.current.has(cacheKey)
+    ) {
+      return false
     }
 
-    if (autoProcessingRef.current) {
-      if (autoProcessingSessionRef.current === sessionId) {
+    if (bookImageQueuedHashesRef.current.has(image.imageHash)) {
+      if (priority === 'visible') {
+        bookImageQueueRef.current = bookImageQueueRef.current.filter(
+          (item) => item.image.imageHash !== image.imageHash,
+        )
+        bookImageQueueRef.current.unshift({ image, priority })
+        return true
+      }
+
+      return false
+    }
+
+    if (priority === 'visible') {
+      bookImageQueueRef.current = bookImageQueueRef.current.filter(
+        (item) => item.image.imageHash !== image.imageHash,
+      )
+      bookImageQueueRef.current.unshift({ image, priority })
+    } else {
+      bookImageQueueRef.current.push({ image, priority })
+    }
+
+    bookImageQueuedHashesRef.current.add(image.imageHash)
+    return true
+  }, [])
+
+  const waitForReaderIdle = useCallback(async (runId: string) => {
+    while (mountedRef.current && currentEnhancementGroupIdRef.current === runId) {
+      const elapsedMs = Date.now() - lastReaderActivityAtRef.current
+      const waitMs = AUTO_ENHANCE_IDLE_DELAY_MS - elapsedMs
+
+      if (waitMs <= 0) {
+        return true
+      }
+
+      await delay(waitMs)
+    }
+
+    return false
+  }, [])
+
+  const processBookImageQueue = useCallback(
+    async (runId: string) => {
+      const sessionId = readerSessionRef.current
+      const targetBookId = activeBookIdRef.current
+      const readerSessionId = currentReaderSessionIdRef.current
+
+      if (!targetBookId || !readerSessionId || bookImageProcessingRunIdRef.current === runId) {
         return
       }
 
-      autoProcessingRef.current = false
-      autoProcessingSessionRef.current = null
-    }
+      const isCurrentRun = () =>
+        mountedRef.current &&
+        isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) &&
+        currentEnhancementGroupIdRef.current === runId
 
-    const isCurrentSession = () => isCurrentReaderSession(sessionId, bookId)
-    const discardSessionQueue = () => {
-      autoQueueRef.current = autoQueueRef.current.filter(
-        (item) => item.sessionId !== sessionId || item.bookId !== bookId,
-      )
-    }
+      if (!isCurrentRun()) {
+        return
+      }
 
-    if (!isCurrentSession()) {
-      discardSessionQueue()
+      bookImageProcessingRunIdRef.current = runId
+
+      try {
+        while (bookImageQueueRef.current.length > 0 && isCurrentRun()) {
+          const queueItem = bookImageQueueRef.current.shift()
+
+          if (!queueItem) {
+            continue
+          }
+
+          const { image, priority } = queueItem
+          const settings = autoEnhanceSettingsRef.current
+          bookImageQueuedHashesRef.current.delete(image.imageHash)
+
+          if (!settings.enhancementEnabled) {
+            setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+              message: 'AI 高精細化はオフです。',
+              tone: 'idle',
+            })
+            break
+          }
+
+          if (!settings.engineReady) {
+            setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+              message: 'AI エンジン未登録のため元画像で表示しています。',
+              tone: 'warning',
+            })
+            break
+          }
+
+          if (priority === 'precompute' && !settings.precomputeBookImages) {
+            continue
+          }
+
+          if (bookImageFailedHashesRef.current.has(image.imageHash)) {
+            continue
+          }
+
+          const cacheKey = buildEnhanceKey(
+            image.imageHash,
+            settings.preferredEngine,
+            settings.zoomEnhancementScale,
+          )
+
+          if (inFlightEnhancementsRef.current.has(cacheKey)) {
+            continue
+          }
+
+          const isIdle = await waitForReaderIdle(runId)
+          if (!isIdle || !isCurrentRun()) {
+            break
+          }
+
+          inFlightEnhancementsRef.current.add(cacheKey)
+          setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+            message: `バックグラウンド処理中 ${getEngineLabel(settings.preferredEngine)} x${settings.zoomEnhancementScale}`,
+            tone: 'working',
+          })
+
+          try {
+            const response = await enhanceBookAssetImage({
+              bookId: targetBookId,
+              engineId: settings.preferredEngine,
+              assetPath: image.assetPath,
+              imageHash: image.imageHash,
+              jobId: createClientId('book-enhance'),
+              readerSessionId: runId,
+              scale: settings.zoomEnhancementScale,
+            })
+
+            if (!isCurrentRun()) {
+              break
+            }
+
+            bookImageCachedHashesRef.current.add(response.imageHash)
+            await applyCachedEnhancedImageToVisibleHash(
+              targetBookId,
+              settings.preferredEngine,
+              settings.zoomEnhancementScale,
+              response.imageHash,
+              runId,
+            )
+
+            setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+              message: response.cacheHit ? 'キャッシュを確認しました。' : '1枚をキャッシュしました。',
+              tone: 'ready',
+            })
+          } catch (enhanceError) {
+            if (!isCurrentRun()) {
+              break
+            }
+
+            bookImageFailedHashesRef.current.add(image.imageHash)
+            setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+              message:
+                enhanceError instanceof Error
+                  ? `バックグラウンド処理をスキップしました: ${enhanceError.message}`
+                  : 'バックグラウンド処理をスキップしました。元画像で表示しています。',
+              tone: 'warning',
+            })
+          } finally {
+            inFlightEnhancementsRef.current.delete(cacheKey)
+          }
+        }
+
+        if (isCurrentRun() && bookImageQueueRef.current.length === 0) {
+          const totalImages = bookImageManifestRef.current.length
+          const cachedImages = bookImageCachedHashesRef.current.size
+          setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+            message:
+              totalImages > 0
+                ? `元画像表示。キャッシュ ${Math.min(cachedImages, totalImages)}/${totalImages}`
+                : '元画像を表示しています。',
+            tone: cachedImages > 0 ? 'ready' : 'idle',
+          })
+        }
+      } finally {
+        if (bookImageProcessingRunIdRef.current === runId) {
+          bookImageProcessingRunIdRef.current = null
+        }
+      }
+    },
+    [
+      applyCachedEnhancedImageToVisibleHash,
+      isCurrentReaderSessionKey,
+      setAutoEnhanceStatusForSession,
+      waitForReaderIdle,
+    ],
+  )
+
+  useEffect(() => {
+    processBookImageQueueRef.current = (runId: string) => {
+      void processBookImageQueue(runId)
+    }
+  }, [processBookImageQueue])
+
+  const refreshVisibleImages = useCallback(async () => {
+    const sessionId = readerSessionRef.current
+    const targetBookId = activeBookIdRef.current
+    const readerSessionId = currentReaderSessionIdRef.current
+    const runId = currentEnhancementGroupIdRef.current
+    const document = currentReaderDocumentRef.current
+    const renderToken = currentRenderTokenRef.current
+    const settings = autoEnhanceSettingsRef.current
+
+    if (!targetBookId || !readerSessionId || !runId || !document) {
       return
     }
 
-    const initialSettings = autoEnhanceSettingsRef.current
-    if (!initialSettings.enhancementEnabled || !initialSettings.autoEnhanceVisibleImages) {
+    if (!settings.enhancementEnabled) {
+      setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+        message: 'AI 高精細化はオフです。',
+        tone: 'idle',
+      })
       return
     }
 
-    if (!initialSettings.engineReady) {
-      setAutoEnhanceStatusForSession(sessionId, bookId, {
+    if (!settings.engineReady) {
+      setAutoEnhanceStatusForSession(sessionId, targetBookId, {
         message: 'AI エンジン未登録のため元画像で表示しています。',
         tone: 'warning',
       })
       return
     }
 
-    autoProcessingRef.current = true
-    autoProcessingSessionRef.current = sessionId
+    const visibleImages = getReaderImageElements(document).filter(isVisibleImage)
 
-    try {
-      while (autoQueueRef.current.length > 0) {
-        if (!isCurrentSession()) {
-          discardSessionQueue()
-          break
-        }
-
-        const item = autoQueueRef.current.shift()
-        const settings = autoEnhanceSettingsRef.current
-
-        if (!item || !mountedRef.current) {
-          continue
-        }
-
-        if (item.sessionId !== sessionId || item.bookId !== bookId) {
-          continue
-        }
-
-        if (
-          item.document !== currentReaderDocumentRef.current ||
-          item.renderToken !== currentRenderTokenRef.current ||
-          !isVisibleImage(item.image)
-        ) {
-          continue
-        }
-
-        if (!settings.enhancementEnabled || !settings.autoEnhanceVisibleImages) {
-          break
-        }
-
-        if (!settings.engineReady) {
-          setAutoEnhanceStatusForSession(sessionId, bookId, {
-            message: 'AI エンジン未登録のため元画像で表示しています。',
-            tone: 'warning',
-          })
-          break
-        }
-
-        const cacheKey = buildEnhanceKey(
-          item.imageHash,
-          settings.preferredEngine,
-          settings.zoomEnhancementScale,
-        )
-        const cachedDataUrl = enhancedImageCacheRef.current.get(cacheKey)
-
-        if (cachedDataUrl) {
-          if (!isCurrentSession()) {
-            discardSessionQueue()
-            break
-          }
-
-          applyEnhancedImage(
-            item.image,
-            cachedDataUrl,
-            item.originalInfo,
-            originalImageInfoRef.current,
-            cacheKey,
-          )
-          setAutoEnhanceStatusForSession(sessionId, bookId, {
-            message: 'AI 高精細化済みの画像を適用しました。',
-            tone: 'ready',
-          })
-          continue
-        }
-
-        if (
-          processedEnhancementsRef.current.has(cacheKey) ||
-          inFlightEnhancementsRef.current.has(cacheKey)
-        ) {
-          continue
-        }
-
-        inFlightEnhancementsRef.current.add(cacheKey)
-        setAutoEnhanceStatusForSession(sessionId, bookId, {
-          message: `AI 高精細化中: ${getEngineLabel(settings.preferredEngine)} x${settings.zoomEnhancementScale}`,
-          tone: 'working',
-        })
-
-        try {
-          if (!isCurrentSession()) {
-            discardSessionQueue()
-            break
-          }
-
-          const response = await enhanceBookImage({
-            bookId,
-            engineId: settings.preferredEngine,
-            imageDataUrl: item.dataUrl,
-            imageHash: item.imageHash,
-            scale: settings.zoomEnhancementScale,
-          })
-
-          if (!isCurrentSession()) {
-            discardSessionQueue()
-            break
-          }
-
-          enhancedImageCacheRef.current.set(cacheKey, response.imageDataUrl)
-          processedEnhancementsRef.current.add(cacheKey)
-          if (
-            isCurrentSession() &&
-            item.document === currentReaderDocumentRef.current &&
-            item.renderToken === currentRenderTokenRef.current &&
-            isVisibleImage(item.image)
-          ) {
-            applyEnhancedImage(
-              item.image,
-              response.imageDataUrl,
-              item.originalInfo,
-              originalImageInfoRef.current,
-              cacheKey,
-            )
-          }
-          setAutoEnhanceStatusForSession(sessionId, bookId, {
-            message: response.cacheHit
-              ? 'キャッシュ済みの高精細画像を適用しました。'
-              : '表示中の画像へ AI 高精細化を適用しました。',
-            tone: 'ready',
-          })
-        } catch (enhanceError) {
-          if (!isCurrentSession()) {
-            discardSessionQueue()
-            break
-          }
-
-          processedEnhancementsRef.current.add(cacheKey)
-          setAutoEnhanceStatusForSession(sessionId, bookId, {
-            message:
-              enhanceError instanceof Error
-                ? `AI 自動適用をスキップしました: ${enhanceError.message}`
-                : 'AI 自動適用をスキップしました。元画像で表示しています。',
-            tone: 'warning',
-          })
-        } finally {
-          inFlightEnhancementsRef.current.delete(cacheKey)
-        }
-      }
-    } finally {
-      if (autoProcessingSessionRef.current === sessionId) {
-        autoProcessingRef.current = false
-        autoProcessingSessionRef.current = null
-      }
-    }
-  }, [isCurrentReaderSession, setAutoEnhanceStatusForSession])
-
-  const enqueueVisibleImages = useCallback(
-    (document: Document) => {
-      const sessionId = readerSessionRef.current
-      const bookId = activeBookIdRef.current
-
-      if (!bookId) {
-        return
-      }
-
-      const isCurrentSession = () => isCurrentReaderSession(sessionId, bookId)
-      const settings = autoEnhanceSettingsRef.current
-
-      if (!settings.enhancementEnabled) {
-        setAutoEnhanceStatusForSession(sessionId, bookId, {
-          message: 'AI 高精細化はオフです。',
-          tone: 'idle',
-        })
-        return
-      }
-
-      if (!settings.autoEnhanceVisibleImages) {
-        setAutoEnhanceStatusForSession(sessionId, bookId, {
-          message: '表示画像の自動高精細化はオフです。',
-          tone: 'idle',
-        })
-        return
-      }
-
-      if (!settings.engineReady) {
-        setAutoEnhanceStatusForSession(sessionId, bookId, {
-          message: 'AI エンジン未登録のため元画像で表示しています。',
-          tone: 'warning',
-        })
-        return
-      }
-
-      const images = (Array.from(document.querySelectorAll('img')) as HTMLImageElement[]).filter(
-        isVisibleImage,
-      )
-
-      if (images.length === 0) {
-        setAutoEnhanceStatusForSession(sessionId, bookId, {
-          message: '表示中の画像を待機しています。',
-          tone: 'idle',
-        })
-        return
-      }
-
-      const renderToken = currentRenderTokenRef.current
-
-      for (const image of images) {
-        if (image.dataset.prismpageQueuePending === 'true') {
-          continue
-        }
-
-        image.dataset.prismpageQueuePending = 'true'
-
-        void prepareOriginalImageInfo(image)
-          .then((originalInfo) => {
-            delete image.dataset.prismpageQueuePending
-
-            if (
-              !isCurrentSession() ||
-              document !== currentReaderDocumentRef.current ||
-              renderToken !== currentRenderTokenRef.current ||
-              !isVisibleImage(image)
-            ) {
-              return
-            }
-
-            const latestSettings = autoEnhanceSettingsRef.current
-            const cacheKey = buildEnhanceKey(
-              originalInfo.imageHash,
-              latestSettings.preferredEngine,
-              latestSettings.zoomEnhancementScale,
-            )
-            const cachedDataUrl = enhancedImageCacheRef.current.get(cacheKey)
-
-            if (image.dataset.prismpageEnhancedKey === cacheKey) {
-              return
-            }
-
-            if (cachedDataUrl) {
-              applyEnhancedImage(
-                image,
-                cachedDataUrl,
-                originalInfo,
-                originalImageInfoRef.current,
-                cacheKey,
-              )
-              return
-            }
-
-            const alreadyQueued = autoQueueRef.current.some(
-              (item) => item.image === image && item.renderToken === renderToken,
-            )
-
-            if (
-              alreadyQueued ||
-              processedEnhancementsRef.current.has(cacheKey) ||
-              inFlightEnhancementsRef.current.has(cacheKey)
-            ) {
-              return
-            }
-
-            image.dataset.prismpageQueuedKey = cacheKey
-            autoQueueRef.current.push({
-              bookId,
-              dataUrl: originalInfo.dataUrl,
-              document,
-              image,
-              imageHash: originalInfo.imageHash,
-              originalInfo,
-              renderToken,
-              sessionId,
-            })
-            setAutoEnhanceStatusForSession(sessionId, bookId, {
-              message: '表示画像を AI 高精細化キューへ追加しました。',
-              tone: 'working',
-            })
-            void processAutoEnhanceQueue()
-          })
-          .catch(() => {
-            delete image.dataset.prismpageQueuePending
-          })
-      }
-    },
-    [
-      isCurrentReaderSession,
-      prepareOriginalImageInfo,
-      processAutoEnhanceQueue,
-      setAutoEnhanceStatusForSession,
-    ],
-  )
-
-  const openZoomedImage = useCallback(async (image: HTMLImageElement) => {
-    const sessionId = readerSessionRef.current
-    const bookId = activeBookIdRef.current
-
-    if (!bookId) {
+    if (visibleImages.length === 0) {
+      setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+        message: '元画像を表示しています。',
+        tone: 'idle',
+      })
       return
     }
 
-    try {
+    let applied = false
+    let queued = false
+
+    for (const image of visibleImages) {
       const originalInfo = await prepareOriginalImageInfo(image)
 
-      if (!isCurrentReaderSession(sessionId, bookId)) {
+      if (
+        !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
+        currentEnhancementGroupIdRef.current !== runId ||
+        document !== currentReaderDocumentRef.current ||
+        renderToken !== currentRenderTokenRef.current
+      ) {
         return
       }
 
-      const settings = autoEnhanceSettingsRef.current
       const cacheKey = buildEnhanceKey(
         originalInfo.imageHash,
         settings.preferredEngine,
         settings.zoomEnhancementScale,
       )
 
-      setZoomedImage({
-        bookId,
-        caption: image.alt || 'EPUB image',
-        enhancedDataUrl: enhancedImageCacheRef.current.get(cacheKey),
-        imageHash: originalInfo.imageHash,
-        originalDataUrl: originalInfo.dataUrl,
-        sessionId,
-      })
-    } catch {
-      if (isCurrentReaderSession(sessionId, bookId)) {
-        setError('拡大画像の読み込みに失敗しました。')
+      if (getImageDataAttribute(image, 'prismpageEnhancedKey') === cacheKey) {
+        continue
+      }
+
+      const cachedDataUrl = settings.autoEnhanceVisibleImages
+        ? await readEnhancedImageForDisplay(
+            targetBookId,
+            settings.preferredEngine,
+            settings.zoomEnhancementScale,
+            originalInfo.imageHash,
+          )
+        : null
+
+      if (
+        !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
+        currentEnhancementGroupIdRef.current !== runId ||
+        document !== currentReaderDocumentRef.current ||
+        renderToken !== currentRenderTokenRef.current
+      ) {
+        return
+      }
+
+      if (cachedDataUrl) {
+        if (settings.autoEnhanceVisibleImages) {
+          applyEnhancedImage(
+            image,
+            cachedDataUrl,
+            originalInfo,
+            originalImageInfoRef.current,
+            cacheKey,
+          )
+          applied = true
+        }
+        continue
+      }
+
+      const manifestImage = bookImageByHashRef.current.get(originalInfo.imageHash)
+      if (
+        manifestImage &&
+        (settings.precomputeBookImages || settings.autoEnhanceVisibleImages) &&
+        enqueueBookImage(manifestImage, 'visible')
+      ) {
+        queued = true
       }
     }
-  }, [isCurrentReaderSession, prepareOriginalImageInfo])
 
-  const rescanCurrentDocument = useCallback(() => {
-    const sessionId = readerSessionRef.current
-    const bookId = activeBookIdRef.current
-    const document = currentReaderDocumentRef.current
-
-    cleanupQueueForDocument(document)
-
-    if (document) {
-      enqueueVisibleImages(document)
+    if (queued) {
+      setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+        message: '元画像表示。バックグラウンド処理を待機中。',
+        tone: 'working',
+      })
+      processBookImageQueueRef.current(runId)
       return
     }
 
-    if (bookId) {
-      setAutoEnhanceStatusForSession(sessionId, bookId, {
-        message: '表示画像を待機しています。',
-        tone: 'idle',
+    if (applied) {
+      setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+        message: 'キャッシュ済み画像を差し替えました。',
+        tone: 'ready',
       })
+      return
     }
-  }, [cleanupQueueForDocument, enqueueVisibleImages, setAutoEnhanceStatusForSession])
+
+    setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+      message: settings.autoEnhanceVisibleImages
+        ? '元画像表示。キャッシュ待機中。'
+        : '元画像のまま表示しています。',
+      tone: 'idle',
+    })
+  }, [
+    enqueueBookImage,
+    isCurrentReaderSessionKey,
+    prepareOriginalImageInfo,
+    readEnhancedImageForDisplay,
+    setAutoEnhanceStatusForSession,
+  ])
+
+  const startBookImageScan = useCallback(
+    async (
+      sessionId: number,
+      targetBookId: string,
+      readerSessionId: string,
+      runId: string,
+    ) => {
+      const scanToken = ++bookImageScanTokenRef.current
+      const settings = autoEnhanceSettingsRef.current
+
+      if (!settings.enhancementEnabled) {
+        setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+          message: 'AI 高精細化はオフです。',
+          tone: 'idle',
+        })
+        return
+      }
+
+      if (!settings.engineReady) {
+        setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+          message: 'AI エンジン未登録のため元画像で表示しています。',
+          tone: 'warning',
+        })
+        return
+      }
+
+      setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+        message: '元画像表示。画像を確認中。',
+        tone: 'working',
+      })
+
+      try {
+        const response = await scanBookImages({
+          bookId: targetBookId,
+          engineId: settings.preferredEngine,
+          scale: settings.zoomEnhancementScale,
+        })
+
+        if (
+          scanToken !== bookImageScanTokenRef.current ||
+          !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
+          currentEnhancementGroupIdRef.current !== runId
+        ) {
+          return
+        }
+
+        const images = [...response.images].sort((left, right) => {
+          if (left.spineIndex !== right.spineIndex) {
+            return left.spineIndex - right.spineIndex
+          }
+
+          return left.order - right.order
+        })
+        bookImageManifestRef.current = images
+        bookImageByHashRef.current = new Map(images.map((image) => [image.imageHash, image]))
+        bookImageCachedHashesRef.current = new Set(
+          images.filter((image) => image.cached).map((image) => image.imageHash),
+        )
+
+        await refreshVisibleImages()
+
+        if (!settings.precomputeBookImages) {
+          setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+            message: '元画像表示。開いたページだけ処理します。',
+            tone: 'idle',
+          })
+          return
+        }
+
+        let queuedCount = 0
+        for (const image of images) {
+          if (!image.cached && enqueueBookImage(image, 'precompute')) {
+            queuedCount += 1
+          }
+        }
+
+        setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+          message:
+            images.length > 0
+              ? `元画像表示。キャッシュ ${response.cachedImages}/${response.totalImages}`
+              : '元画像を表示しています。',
+          tone: queuedCount > 0 ? 'working' : 'ready',
+        })
+
+        if (queuedCount > 0) {
+          processBookImageQueueRef.current(runId)
+        }
+      } catch {
+        if (isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId)) {
+          setAutoEnhanceStatusForSession(sessionId, targetBookId, {
+            message: '元画像表示。バックグラウンド処理を開始できません。',
+            tone: 'warning',
+          })
+        }
+      }
+    },
+    [
+      enqueueBookImage,
+      isCurrentReaderSessionKey,
+      refreshVisibleImages,
+      setAutoEnhanceStatusForSession,
+    ],
+  )
 
   useEffect(() => {
-    const sessionId = readerSessionRef.current
-    const bookId = activeBookIdRef.current
+    zoomedImageRef.current = zoomedImage
+  }, [zoomedImage])
 
-    if (!bookId) {
-      return undefined
+  const restartIdleAutoEnhanceTimer = useCallback(
+    (status?: AutoEnhanceStatus) => {
+      const sessionId = readerSessionRef.current
+      const targetBookId = activeBookIdRef.current
+      const readerSessionId = currentReaderSessionIdRef.current
+      const runId = currentEnhancementGroupIdRef.current
+      const activityGeneration = idleGenerationRef.current + 1
+
+      idleGenerationRef.current = activityGeneration
+      setIdleGenerationSnapshot(activityGeneration)
+      lastReaderActivityAtRef.current = Date.now()
+
+      if (idleTimerRef.current !== undefined) {
+        window.clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = undefined
+      }
+
+      if (targetBookId && status) {
+        setAutoEnhanceStatusForSession(sessionId, targetBookId, status)
+      }
+
+      if (!targetBookId || !readerSessionId || !runId) {
+        return
+      }
+
+      idleTimerRef.current = window.setTimeout(() => {
+        idleTimerRef.current = undefined
+
+        if (
+          idleGenerationRef.current !== activityGeneration ||
+          !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
+          currentEnhancementGroupIdRef.current !== runId
+        ) {
+          return
+        }
+
+        void refreshVisibleImages()
+        processBookImageQueueRef.current(runId)
+      }, AUTO_ENHANCE_IDLE_DELAY_MS)
+    },
+    [isCurrentReaderSessionKey, refreshVisibleImages, setAutoEnhanceStatusForSession],
+  )
+
+  const handleReaderActivity = useCallback(() => {
+    restartIdleAutoEnhanceTimer({
+      message: '元画像表示。読書操作を優先中。',
+      tone: 'idle',
+    })
+  }, [restartIdleAutoEnhanceTimer])
+
+  const bindDocumentActivityListeners = useCallback(
+    (document: Document) => {
+      const view = document.defaultView
+      const listenerOptions = { capture: true }
+
+      document.addEventListener('click', handleReaderActivity, listenerOptions)
+      document.addEventListener('keydown', handleReaderActivity, listenerOptions)
+      view?.addEventListener('scroll', handleReaderActivity, listenerOptions)
+
+      return () => {
+        document.removeEventListener('click', handleReaderActivity, listenerOptions)
+        document.removeEventListener('keydown', handleReaderActivity, listenerOptions)
+        view?.removeEventListener('scroll', handleReaderActivity, listenerOptions)
+      }
+    },
+    [handleReaderActivity],
+  )
+
+  const openZoomedImage = useCallback(async (image: ReaderImageElement) => {
+    const sessionId = readerSessionRef.current
+    const targetBookId = activeBookIdRef.current
+    const readerSessionId = currentReaderSessionIdRef.current
+
+    if (!targetBookId || !readerSessionId) {
+      return
     }
 
+    try {
+      const originalInfo = await prepareOriginalImageInfo(image)
+
+      if (!isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId)) {
+        return
+      }
+
+      const settings = autoEnhanceSettingsRef.current
+      const enhancedDataUrl = await readEnhancedImageForDisplay(
+        targetBookId,
+        settings.preferredEngine,
+        settings.zoomEnhancementScale,
+        originalInfo.imageHash,
+      )
+
+      if (!isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId)) {
+        return
+      }
+
+      setZoomedImage({
+        bookId: targetBookId,
+        caption: getImageCaption(image),
+        enhancedDataUrl: enhancedDataUrl ?? undefined,
+        imageHash: originalInfo.imageHash,
+        originalDataUrl: originalInfo.dataUrl,
+        readerSessionId,
+        sessionId,
+      })
+    } catch {
+      if (isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId)) {
+        setError('拡大画像の読み込みに失敗しました。')
+      }
+    }
+  }, [isCurrentReaderSessionKey, prepareOriginalImageInfo, readEnhancedImageForDisplay])
+
+  useEffect(() => {
     autoEnhanceSettingsRef.current = {
+      autoEnhanceZoomedImage,
       autoEnhanceVisibleImages,
       engineReady: Boolean(currentEngineStatus?.ready),
       enhancementEnabled,
+      precomputeBookImages,
       preferredEngine,
       zoomEnhancementScale,
     }
-
-    let statusTimerId: number | undefined
-    const scheduleStatus = (status: AutoEnhanceStatus) => {
-      statusTimerId = window.setTimeout(() => {
-        setAutoEnhanceStatusForSession(sessionId, bookId, status)
-      }, 0)
-    }
-
-    if (!enhancementEnabled) {
-      scheduleStatus({
-        message: 'AI 高精細化はオフです。',
-        tone: 'idle',
-      })
-      return () => {
-        window.clearTimeout(statusTimerId)
-      }
-    }
-
-    if (!autoEnhanceVisibleImages) {
-      scheduleStatus({
-        message: '表示画像の自動高精細化はオフです。',
-        tone: 'idle',
-      })
-      return () => {
-        window.clearTimeout(statusTimerId)
-      }
-    }
-
-    if (!currentEngineStatus?.ready) {
-      scheduleStatus({
-        message: 'AI エンジン未登録のため元画像で表示しています。',
-        tone: 'warning',
-      })
-      return () => {
-        window.clearTimeout(statusTimerId)
-      }
-    }
-
-    const rescanTimerId = window.setTimeout(() => {
-      setAutoEnhanceStatusForSession(sessionId, bookId, {
-        message: 'AI 自動適用を待機しています。',
-        tone: 'idle',
-      })
-      if (isCurrentReaderSession(sessionId, bookId)) {
-        rescanCurrentDocument()
-        void processAutoEnhanceQueue()
-      }
-    }, 0)
-
-    return () => {
-      window.clearTimeout(rescanTimerId)
-    }
   }, [
     autoEnhanceVisibleImages,
+    autoEnhanceZoomedImage,
     currentEngineStatus?.ready,
     enhancementEnabled,
-    isCurrentReaderSession,
+    precomputeBookImages,
     preferredEngine,
-    processAutoEnhanceQueue,
-    rescanCurrentDocument,
-    setAutoEnhanceStatusForSession,
     zoomEnhancementScale,
+  ])
+
+  useEffect(() => {
+    if (!currentBookId || !readerReady) {
+      return undefined
+    }
+
+    const sessionId = readerSessionRef.current
+    const readerSessionId = currentReaderSessionIdRef.current
+
+    if (!readerSessionId || !isCurrentReaderSession(sessionId, currentBookId)) {
+      return undefined
+    }
+
+    const settings = autoEnhanceSettingsRef.current
+    const runId = buildBookEnhancementRunId(
+      readerSessionId,
+      settings.preferredEngine,
+      settings.zoomEnhancementScale,
+    )
+
+    currentEnhancementGroupIdRef.current = runId
+    resetBookEnhancementState()
+    setAutoEnhanceStatusForSession(sessionId, currentBookId, {
+      message: settings.enhancementEnabled
+        ? '元画像表示。バックグラウンド準備中。'
+        : 'AI 高精細化はオフです。',
+      tone: settings.enhancementEnabled ? 'working' : 'idle',
+    })
+
+    void startBookImageScan(sessionId, currentBookId, readerSessionId, runId)
+
+    return () => {
+      if (currentEnhancementGroupIdRef.current === runId) {
+        currentEnhancementGroupIdRef.current = null
+      }
+      cancelEnhancementsForGroup(runId)
+    }
+  }, [
+    currentBookId,
+    currentEngineStatus?.ready,
+    enhancementEnabled,
+    precomputeBookImages,
+    preferredEngine,
+    readerReady,
+    zoomEnhancementScale,
+    buildBookEnhancementRunId,
+    cancelEnhancementsForGroup,
+    isCurrentReaderSession,
+    resetBookEnhancementState,
+    setAutoEnhanceStatusForSession,
+    startBookImageScan,
+  ])
+
+  useEffect(() => {
+    if (!currentBookId || !readerReady) {
+      return
+    }
+
+    if (autoEnhanceVisibleImages) {
+      void refreshVisibleImages()
+      return
+    }
+
+    const sessionId = readerSessionRef.current
+    setAutoEnhanceStatusForSession(sessionId, currentBookId, {
+      message: '元画像のまま表示しています。',
+      tone: 'idle',
+    })
+  }, [
+    autoEnhanceVisibleImages,
+    currentBookId,
+    readerReady,
+    refreshVisibleImages,
+    setAutoEnhanceStatusForSession,
   ])
 
   useEffect(() => {
@@ -787,6 +1234,20 @@ export function ReaderPage() {
   }, [])
 
   useEffect(() => {
+    const listenerOptions = { capture: true }
+
+    window.addEventListener('click', handleReaderActivity, listenerOptions)
+    window.addEventListener('keydown', handleReaderActivity, listenerOptions)
+    window.addEventListener('scroll', handleReaderActivity, listenerOptions)
+
+    return () => {
+      window.removeEventListener('click', handleReaderActivity, listenerOptions)
+      window.removeEventListener('keydown', handleReaderActivity, listenerOptions)
+      window.removeEventListener('scroll', handleReaderActivity, listenerOptions)
+    }
+  }, [handleReaderActivity])
+
+  useEffect(() => {
     if (!currentBookId || !containerRef.current) {
       return
     }
@@ -800,19 +1261,17 @@ export function ReaderPage() {
     readerSessionRef.current += 1
     activeBookIdRef.current = currentBookId
     const sessionId = readerSessionRef.current
+    const readerSessionId = buildReaderSessionId(sessionId, currentBookId)
+    currentReaderSessionIdRef.current = readerSessionId
+    currentEnhancementGroupIdRef.current = null
     const isActiveReader = () => isCurrentReaderSession(sessionId, currentBookId)
     setZoomedImage(null)
     setIsEnhancing(false)
-    autoQueueRef.current = []
-    autoProcessingRef.current = false
-    autoProcessingSessionRef.current = null
     currentReaderDocumentRef.current = null
     currentRenderTokenRef.current += 1
-    inFlightEnhancementsRef.current.clear()
-    originalImageInfoRef.current = new WeakMap<HTMLImageElement, OriginalImageInfo>()
-    processedEnhancementsRef.current.clear()
-    enhancedImageCacheRef.current.clear()
-    const inFlightEnhancements = inFlightEnhancementsRef.current
+    originalImageInfoRef.current = new WeakMap<ReaderImageElement, OriginalImageInfo>()
+    resetBookEnhancementState()
+    lastReaderActivityAtRef.current = Date.now()
 
     const loadReader = async () => {
       try {
@@ -873,28 +1332,31 @@ export function ReaderPage() {
             lastOpenedAt: Date.now(),
             progressPercentage: nextProgress,
           })
-          cleanupQueueForDocument(currentReaderDocumentRef.current)
+          handleReaderActivity()
         }
 
         renderedHandler = (_section, contents) => {
           currentRenderTokenRef.current += 1
           currentReaderDocumentRef.current = contents.document
-          cleanupQueueForDocument(contents.document)
+          documentActivityCleanupRef.current?.()
+          documentActivityCleanupRef.current = bindDocumentActivityListeners(contents.document)
 
-          const images = Array.from(contents.document.querySelectorAll('img')) as HTMLImageElement[]
+          const images = getReaderImageElements(contents.document)
 
           for (const image of images) {
-            if (image.dataset.prismpageClickBound === 'true') {
+            if (getImageDataAttribute(image, 'prismpageClickBound') === 'true') {
               continue
             }
 
-            image.dataset.prismpageClickBound = 'true'
+            setImageDataAttribute(image, 'prismpageClickBound', 'true')
             image.addEventListener('click', () => {
+              handleReaderActivity()
               void openZoomedImage(image)
             })
           }
 
-          enqueueVisibleImages(contents.document)
+          void refreshVisibleImages()
+          restartIdleAutoEnhanceTimer()
         }
 
         rendition.on('relocated', relocationHandler)
@@ -919,16 +1381,23 @@ export function ReaderPage() {
 
     return () => {
       mountedRef.current = false
+      const endingEnhancementGroupId = currentEnhancementGroupIdRef.current
       readerSessionRef.current += 1
       activeBookIdRef.current = undefined
+      currentReaderSessionIdRef.current = null
+      currentEnhancementGroupIdRef.current = null
       setZoomedImage(null)
       setIsEnhancing(false)
-      autoQueueRef.current = []
-      autoProcessingRef.current = false
-      autoProcessingSessionRef.current = null
+      if (idleTimerRef.current !== undefined) {
+        window.clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = undefined
+      }
+      idleGenerationRef.current += 1
       currentReaderDocumentRef.current = null
       currentRenderTokenRef.current += 1
-      inFlightEnhancements.clear()
+      documentActivityCleanupRef.current?.()
+      documentActivityCleanupRef.current = null
+      cancelEnhancementsForGroup(endingEnhancementGroupId)
       if (relocationHandler && renditionRef.current) {
         renditionRef.current.off('relocated', relocationHandler as (...args: never[]) => void)
       }
@@ -940,32 +1409,49 @@ export function ReaderPage() {
       renditionRef.current = null
       bookRef.current = null
       setReaderReady(false)
+      resetBookEnhancementState()
     }
   }, [
     applyReaderTheme,
-    cleanupQueueForDocument,
+    bindDocumentActivityListeners,
+    buildReaderSessionId,
+    cancelEnhancementsForGroup,
     currentBookId,
-    enqueueVisibleImages,
+    handleReaderActivity,
     isCurrentReaderSession,
     openZoomedImage,
     patchBook,
+    refreshVisibleImages,
+    resetBookEnhancementState,
+    restartIdleAutoEnhanceTimer,
   ])
 
   useEffect(() => {
     applyReaderTheme()
   }, [applyReaderTheme])
 
-  const handleEnhanceImage = useCallback(async () => {
+  const handleEnhanceImage = useCallback(async (options?: {
+    automatic?: boolean
+    activityGeneration?: number
+  }) => {
     if (!zoomedImage || !enhancementEnabled || !currentBookId) {
       return
     }
 
     const zoomedSessionId = zoomedImage.sessionId
     const zoomedBookId = zoomedImage.bookId
+    const zoomedReaderSessionId = zoomedImage.readerSessionId
+    const automaticGeneration = options?.activityGeneration
+    const enhancementGroupId =
+      currentEnhancementGroupIdRef.current ?? `${zoomedReaderSessionId}:manual:${createClientId('manual')}`
+    const isSameZoomedImageSession = () =>
+      currentBookId === zoomedBookId &&
+      isCurrentReaderSessionKey(zoomedSessionId, zoomedBookId, zoomedReaderSessionId)
     const isCurrentZoomedImage = () =>
-      currentBookId === zoomedBookId && isCurrentReaderSession(zoomedSessionId, zoomedBookId)
+      isSameZoomedImageSession() &&
+      (!options?.automatic || options.activityGeneration === idleGenerationRef.current)
 
-    if (!isCurrentZoomedImage()) {
+    if (!enhancementGroupId || !isCurrentZoomedImage()) {
       setZoomedImage(null)
       return
     }
@@ -982,11 +1468,26 @@ export function ReaderPage() {
       setError(null)
       const requestImageDataUrl = zoomedImage.originalDataUrl
       const requestImageHash = zoomedImage.imageHash
+      const jobId = createClientId(options?.automatic ? 'auto-zoom-enhance' : 'manual-enhance')
+
+      if (options?.automatic) {
+        if (automaticGeneration === undefined) {
+          return
+        }
+
+        setAutoEnhanceStatusForSession(zoomedSessionId, zoomedBookId, {
+          message: '拡大画像をバックグラウンド処理中。',
+          tone: 'working',
+        })
+      }
+
       const response = await enhanceBookImage({
         bookId: zoomedBookId,
         engineId: preferredEngine,
         imageDataUrl: requestImageDataUrl,
         imageHash: requestImageHash,
+        jobId,
+        readerSessionId: enhancementGroupId,
         scale: zoomEnhancementScale,
       })
 
@@ -1000,8 +1501,8 @@ export function ReaderPage() {
         zoomEnhancementScale,
       )
 
-      enhancedImageCacheRef.current.set(cacheKey, response.imageDataUrl)
-      processedEnhancementsRef.current.add(cacheKey)
+      rememberEnhancedImageDataUrl(cacheKey, response.imageDataUrl)
+      bookImageCachedHashesRef.current.add(requestImageHash)
       setZoomedImage((current) =>
         current &&
         current.bookId === zoomedBookId &&
@@ -1014,16 +1515,34 @@ export function ReaderPage() {
             }
           : current,
       )
+      if (options?.automatic) {
+        setAutoEnhanceStatusForSession(zoomedSessionId, zoomedBookId, {
+          message: response.cacheHit
+            ? 'キャッシュ済みの拡大画像を適用しました。'
+            : '拡大画像をキャッシュしました。',
+          tone: 'ready',
+        })
+      }
     } catch (enhanceError) {
       if (isCurrentZoomedImage()) {
-        setError(
-          enhanceError instanceof Error
-            ? enhanceError.message
-            : 'AI 高精細化に失敗しました。',
-        )
+        if (options?.automatic) {
+          setAutoEnhanceStatusForSession(zoomedSessionId, zoomedBookId, {
+            message:
+              enhanceError instanceof Error
+                ? `拡大画像の処理をスキップしました: ${enhanceError.message}`
+                : '拡大画像の処理をスキップしました。元画像で表示しています。',
+            tone: 'warning',
+          })
+        } else {
+          setError(
+            enhanceError instanceof Error
+              ? enhanceError.message
+              : 'AI 高精細化に失敗しました。',
+          )
+        }
       }
     } finally {
-      if (isCurrentZoomedImage()) {
+      if (isSameZoomedImageSession()) {
         setIsEnhancing(false)
       }
     }
@@ -1031,14 +1550,22 @@ export function ReaderPage() {
     currentBookId,
     currentEngineStatus?.ready,
     enhancementEnabled,
-    isCurrentReaderSession,
+    isCurrentReaderSessionKey,
     preferredEngine,
+    rememberEnhancedImageDataUrl,
+    setAutoEnhanceStatusForSession,
     zoomEnhancementScale,
     zoomedImage,
   ])
 
   useEffect(() => {
-    if (!zoomedImage || !autoEnhanceZoomedImage || !enhancementEnabled || !currentEngineStatus?.ready) {
+    if (
+      !zoomedImage ||
+      !autoEnhanceZoomedImage ||
+      !enhancementEnabled ||
+      !currentEngineStatus?.ready ||
+      isEnhancing
+    ) {
       return
     }
 
@@ -1046,9 +1573,17 @@ export function ReaderPage() {
       return
     }
 
+    const activityGeneration = idleGenerationRef.current
     const timerId = window.setTimeout(() => {
-      void handleEnhanceImage()
-    }, 0)
+      if (activityGeneration !== idleGenerationRef.current) {
+        return
+      }
+
+      void handleEnhanceImage({
+        automatic: true,
+        activityGeneration,
+      })
+    }, AUTO_ENHANCE_IDLE_DELAY_MS)
 
     return () => {
       window.clearTimeout(timerId)
@@ -1058,6 +1593,8 @@ export function ReaderPage() {
     currentEngineStatus?.ready,
     enhancementEnabled,
     handleEnhanceImage,
+    idleGenerationSnapshot,
+    isEnhancing,
     zoomedImage,
   ])
 
@@ -1096,7 +1633,10 @@ export function ReaderPage() {
               type="button"
               className="reader-icon-button"
               aria-label="目次"
-              onClick={() => setIsTocOpen((current) => !current)}
+              onClick={() => {
+                handleReaderActivity()
+                setIsTocOpen((current) => !current)
+              }}
             >
               <ListTree size={19} />
             </button>
@@ -1122,7 +1662,10 @@ export function ReaderPage() {
           <button
             type="button"
             className="reader-icon-button"
-            onClick={() => void renditionRef.current?.prev()}
+            onClick={() => {
+              handleReaderActivity()
+              void renditionRef.current?.prev()
+            }}
             disabled={toolbarDisabled}
             aria-label="前へ"
           >
@@ -1140,7 +1683,10 @@ export function ReaderPage() {
           <button
             type="button"
             className="reader-icon-button"
-            onClick={() => void renditionRef.current?.next()}
+            onClick={() => {
+              handleReaderActivity()
+              void renditionRef.current?.next()
+            }}
             disabled={toolbarDisabled}
             aria-label="次へ"
           >
@@ -1180,6 +1726,7 @@ export function ReaderPage() {
                       type="button"
                       className="toc-button"
                       onClick={() => {
+                        handleReaderActivity()
                         setIsTocOpen(false)
                         void renditionRef.current?.display(item.href)
                       }}
@@ -1281,9 +1828,9 @@ export function ReaderPage() {
                 </div>
 
                 <ul className="note-list">
-                  <li>- 読書中の表示画像は設定中の AI エンジンで自動処理します。</li>
+                  <li>- 元画像で読みながら、裏で高精細化します。</li>
+                  <li>- 完了済みの画像はキャッシュから即表示します。</li>
                   <li>- 失敗時は元画像のまま読めます。</li>
-                  <li>- 高精細画像は書籍・エンジン・倍率ごとにキャッシュします。</li>
                 </ul>
               </div>
             </div>

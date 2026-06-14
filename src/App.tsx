@@ -6,6 +6,7 @@ import { BookOpenText, ImageUpscale, Library, Settings2 } from 'lucide-react'
 import prismLogo from '@/assets/prismpage-logo.png'
 import { useLibraryStore } from '@/features/library/book-store'
 import { useSettingsStore } from '@/features/settings/settings-store'
+import { StartupUpdateNotice } from '@/features/settings/startup-update-notice'
 import { extractEpubPreview } from '@/lib/epub'
 import { getEngineLabel } from '@/lib/engines'
 import {
@@ -32,6 +33,7 @@ function App() {
   const preferredEngine = useSettingsStore((state) => state.preferredEngine)
   const [openedFileMessage, setOpenedFileMessage] = useState<string | null>(null)
   const [openedFileError, setOpenedFileError] = useState<string | null>(null)
+  const [startupUpdateVisible, setStartupUpdateVisible] = useState(false)
   const processingPathsRef = useRef(new Set<string>())
   const isReaderRoute = location.pathname.startsWith('/reader/')
 
@@ -227,14 +229,16 @@ function App() {
       ) : null}
 
       <main className={`content-shell${isReaderRoute ? ' content-shell--reader' : ''}`}>
-        {openedFileMessage || openedFileError ? (
-          <div className={`app-toast-stack${isReaderRoute ? ' is-reader' : ''}`}>
-            {openedFileMessage ? (
-              <div className="message-strip is-success">{openedFileMessage}</div>
-            ) : null}
-            {openedFileError ? <div className="message-strip is-error">{openedFileError}</div> : null}
-          </div>
-        ) : null}
+        <div
+          className={`app-toast-stack${isReaderRoute ? ' is-reader' : ''}`}
+          hidden={!startupUpdateVisible && !openedFileMessage && !openedFileError}
+        >
+          <StartupUpdateNotice onVisibleChange={setStartupUpdateVisible} />
+          {openedFileMessage ? (
+            <div className="message-strip is-success">{openedFileMessage}</div>
+          ) : null}
+          {openedFileError ? <div className="message-strip is-error">{openedFileError}</div> : null}
+        </div>
         <Outlet />
       </main>
     </div>

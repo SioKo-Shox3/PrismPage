@@ -85,10 +85,58 @@ export interface EnhanceBookImageRequest {
   engineId: EngineId
   imageDataUrl: string
   imageHash: string
+  jobId: string
+  readerSessionId: string
   scale: number
 }
 
 export interface EnhanceBookImageResponse {
   cacheHit: boolean
   imageDataUrl: string
+}
+
+export interface ScanBookImagesRequest {
+  bookId: string
+  engineId: EngineId
+  scale: number
+}
+
+export interface ScannedBookImage {
+  assetPath: string
+  imageHash: string
+  mimeType: string
+  spineIndex: number
+  order: number
+  cached: boolean
+}
+
+export interface ScanBookImagesResponse {
+  bookId: string
+  engineId: EngineId
+  scale: number
+  totalImages: number
+  cachedImages: number
+  images: ScannedBookImage[]
+}
+
+export interface EnhanceBookAssetImageRequest {
+  bookId: string
+  engineId: EngineId
+  assetPath: string
+  imageHash: string
+  jobId: string
+  readerSessionId: string
+  scale: number
+}
+
+export interface EnhanceBookAssetImageResponse {
+  imageHash: string
+  cacheHit: boolean
+}
+
+export interface ReadEnhancedBookImageRequest {
+  bookId: string
+  engineId: EngineId
+  imageHash: string
+  scale: number
 }

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  EnhanceBookAssetImageRequest,
+  EnhanceBookAssetImageResponse,
   EnhanceBookImageRequest,
   EnhanceBookImageResponse,
   EnhanceImageRequest,
@@ -11,6 +13,9 @@ import type {
   EngineInstallOptionsResponse,
   EngineStatus,
   ImportedBook,
+  ReadEnhancedBookImageRequest,
+  ScanBookImagesRequest,
+  ScanBookImagesResponse,
 } from '@/types/app'
 
 export const isTauriRuntime =
@@ -58,6 +63,22 @@ export async function enhanceImage(request: EnhanceImageRequest) {
 
 export async function enhanceBookImage(request: EnhanceBookImageRequest) {
   return invoke<EnhanceBookImageResponse>('enhance_book_image', { request })
+}
+
+export async function scanBookImages(request: ScanBookImagesRequest) {
+  return invoke<ScanBookImagesResponse>('scan_book_images', { request })
+}
+
+export async function enhanceBookAssetImage(request: EnhanceBookAssetImageRequest) {
+  return invoke<EnhanceBookAssetImageResponse>('enhance_book_asset_image', { request })
+}
+
+export async function readEnhancedBookImage(request: ReadEnhancedBookImageRequest) {
+  return invoke<string | null>('read_enhanced_book_image', { request })
+}
+
+export async function cancelEnhancementJobs(readerSessionId: string) {
+  return invoke<void>('cancel_enhancement_jobs', { readerSessionId })
 }
 
 export async function takePendingOpenedEpubs() {
