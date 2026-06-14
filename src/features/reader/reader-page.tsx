@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+} from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import ePub, { type EpubLocation, type EpubNavigationItem, type EpubRendition } from 'epubjs'
 import {
@@ -30,9 +39,18 @@ import type { EngineId, EngineStatus, ScannedBookImage } from '@/types/app'
 
 const AUTO_ENHANCE_IDLE_DELAY_MS = 1500
 const ENHANCED_IMAGE_MEMORY_CACHE_LIMIT = 8
+const IMAGE_CLICK_NAVIGATION_DELAY_MS = 280
+const READER_EDGE_REVEAL_PX = 72
+const READER_SPREAD_MIN_HEIGHT = 650
+const READER_SPREAD_MIN_RATIO = 1.25
+const READER_SPREAD_MIN_WIDTH = 1100
+const READER_WHEEL_THROTTLE_MS = 250
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 
 type ReaderImageElement = HTMLImageElement | SVGImageElement
+type ReaderNavigationDirection = 'next' | 'prev'
+type ReaderPageDirection = 'ltr' | 'rtl'
+type ReaderSpreadMode = 'always' | 'none'
 
 interface ZoomedImageState {
   bookId: string
@@ -69,6 +87,22 @@ interface AutoEnhanceSettings {
 interface BookEnhancementQueueItem {
   image: ScannedBookImage
   priority: 'visible' | 'precompute'
+}
+
+interface ReaderMetadataWithDirection {
+  direction?: unknown
+  pageProgressionDirection?: unknown
+}
+
+interface ReaderLayoutRendition extends EpubRendition {
+  direction(dir: ReaderPageDirection): void
+  getContents?(): unknown
+  resize(width: number, height: number): void
+  spread(spread: ReaderSpreadMode, min?: number): void
+}
+
+interface ReaderContentLike {
+  document?: unknown
 }
 
 function createClientId(prefix: string) {
@@ -148,6 +182,204 @@ function setImageDataAttribute(image: ReaderImageElement, key: string, value: st
 
 function getReaderImageElements(document: Document) {
   return Array.from(document.querySelectorAll('img, svg image')) as ReaderImageElement[]
+}
+
+function isDocument(value: unknown): value is Document {
+  return (
+    typeof Document !== 'undefined' &&
+    value instanceof Document
+  )
+}
+
+function getDocumentFromContent(value: unknown) {
+  if (isDocument(value)) {
+    return value
+  }
+
+  const document = (value as ReaderContentLike | null)?.document
+
+  return isDocument(document) ? document : null
+}
+
+function getDocumentsFromContents(value: unknown) {
+  if (!value) {
+    return []
+  }
+
+  const values = Array.isArray(value) ? value : [value]
+  const documents: Document[] = []
+
+  for (const item of values) {
+    const document = getDocumentFromContent(item)
+
+    if (document && !documents.includes(document)) {
+      documents.push(document)
+    }
+  }
+
+  return documents
+}
+
+function isReaderDocumentConnected(document: Document) {
+  const frameElement = document.defaultView?.frameElement
+
+  return !frameElement || frameElement.isConnected
+}
+
+function isElementTarget(target: EventTarget | null): target is Element {
+  return Boolean(target && typeof (target as Element).closest === 'function')
+}
+
+function isReaderInteractiveTarget(target: EventTarget | null) {
+  if (!isElementTarget(target)) {
+    return false
+  }
+
+  return Boolean(
+    target.closest(
+      [
+        'a',
+        'button',
+        'input',
+        'select',
+        'textarea',
+        'summary',
+        '[contenteditable="true"]',
+        '[role="button"]',
+        '[role="link"]',
+        '[role="menuitem"]',
+        '.reader-topbar',
+        '.reader-bottom-bar',
+        '.reader-toc-panel',
+        '.modal-backdrop',
+      ].join(','),
+    ),
+  )
+}
+
+function getReaderImageFromTarget(target: EventTarget | null) {
+  if (!isElementTarget(target)) {
+    return null
+  }
+
+  return target.closest('img, svg image') as ReaderImageElement | null
+}
+
+function getReaderViewportSize(element: HTMLElement) {
+  const width = Math.max(0, Math.round(element.clientWidth || window.innerWidth))
+  const height = Math.max(0, Math.round(element.clientHeight || window.innerHeight))
+
+  return { height, width }
+}
+
+function shouldUseReaderSpread(width: number, height: number) {
+  return (
+    width >= READER_SPREAD_MIN_WIDTH &&
+    height >= READER_SPREAD_MIN_HEIGHT &&
+    width / Math.max(height, 1) >= READER_SPREAD_MIN_RATIO
+  )
+}
+
+function getReaderSpreadMode(element: HTMLElement): ReaderSpreadMode {
+  const { height, width } = getReaderViewportSize(element)
+
+  return shouldUseReaderSpread(width, height) ? 'always' : 'none'
+}
+
+function getReaderDirection(metadata: unknown): ReaderPageDirection {
+  const direction = String(
+    (metadata as ReaderMetadataWithDirection | null)?.direction ??
+      (metadata as ReaderMetadataWithDirection | null)?.pageProgressionDirection ??
+      '',
+  ).toLowerCase()
+
+  return direction === 'ltr' ? 'ltr' : 'rtl'
+}
+
+function getClickNavigationDirection(
+  clientX: number,
+  width: number,
+  pageDirection: ReaderPageDirection,
+): ReaderNavigationDirection {
+  const clickedLeftSide = clientX < width / 2
+
+  if (pageDirection === 'rtl') {
+    return clickedLeftSide ? 'next' : 'prev'
+  }
+
+  return clickedLeftSide ? 'prev' : 'next'
+}
+
+function getReaderRelativePointFromDocumentEvent(
+  event: MouseEvent,
+  readerElement: HTMLElement | null,
+) {
+  if (!readerElement) {
+    const document = event.view?.document
+
+    return {
+      x: event.clientX,
+      y: event.clientY,
+      height: event.view?.innerHeight || document?.documentElement.clientHeight || window.innerHeight,
+      width: event.view?.innerWidth || document?.documentElement.clientWidth || window.innerWidth,
+    }
+  }
+
+  const readerRect = readerElement.getBoundingClientRect()
+  const frameElement = event.view?.frameElement
+  const frameRect =
+    frameElement instanceof Element ? frameElement.getBoundingClientRect() : null
+  const parentClientX = frameRect ? frameRect.left + event.clientX : event.clientX
+
+  return {
+    x: parentClientX - readerRect.left,
+    y: (frameRect ? frameRect.top + event.clientY : event.clientY) - readerRect.top,
+    height: readerRect.height,
+    width: readerRect.width,
+  }
+}
+
+function isReaderPointNearEdge(point: { height: number; width: number; x: number; y: number }) {
+  return (
+    point.y <= READER_EDGE_REVEAL_PX ||
+    point.height - point.y <= READER_EDGE_REVEAL_PX ||
+    point.x <= READER_EDGE_REVEAL_PX ||
+    point.width - point.x <= READER_EDGE_REVEAL_PX
+  )
+}
+
+function isImageDominantPage(document: Document) {
+  const images = getReaderImageElements(document).filter(isVisibleImage)
+
+  if (images.length === 0) {
+    return false
+  }
+
+  const view = document.defaultView
+  const viewportWidth = view?.innerWidth || document.documentElement.clientWidth
+  const viewportHeight = view?.innerHeight || document.documentElement.clientHeight
+  const viewportArea = Math.max(viewportWidth * viewportHeight, 1)
+  const bodyText = (document.body?.innerText ?? document.body?.textContent ?? '')
+    .replace(/\s+/g, '')
+    .trim()
+  const hasLargeImage = images.some((image) => {
+    const rect = image.getBoundingClientRect()
+    const areaRatio = (rect.width * rect.height) / viewportArea
+
+    return (
+      areaRatio >= 0.35 ||
+      (rect.width >= viewportWidth * 0.68 && rect.height >= viewportHeight * 0.52)
+    )
+  })
+
+  return bodyText.length <= 120 || (hasLargeImage && bodyText.length <= 500)
+}
+
+function applyImagePageClass(document: Document) {
+  const isImagePage = isImageDominantPage(document)
+
+  document.documentElement.classList.toggle('prismpage-image-page', isImagePage)
+  document.body?.classList.toggle('prismpage-image-page', isImagePage)
 }
 
 async function imageElementToBlob(image: ReaderImageElement) {
@@ -264,7 +496,7 @@ function applyEnhancedImage(
 export function ReaderPage() {
   const { bookId } = useParams({ from: '/reader/$bookId' })
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const renditionRef = useRef<EpubRendition | null>(null)
+  const renditionRef = useRef<ReaderLayoutRendition | null>(null)
   const bookRef = useRef<ReturnType<typeof ePub> | null>(null)
   const mountedRef = useRef(false)
   const book = useLibraryStore((state) => state.books.find((entry) => entry.id === bookId))
@@ -290,6 +522,7 @@ export function ReaderPage() {
   const [zoomedImage, setZoomedImage] = useState<ZoomedImageState | null>(null)
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [readerReady, setReaderReady] = useState(false)
+  const [isReaderUiActive, setIsReaderUiActive] = useState(false)
   const [idleGenerationSnapshot, setIdleGenerationSnapshot] = useState(0)
   const [autoEnhanceStatus, setAutoEnhanceStatus] = useState<AutoEnhanceStatus>({
     message: '元画像を表示しています。',
@@ -301,12 +534,16 @@ export function ReaderPage() {
   const readerSessionRef = useRef(0)
   const currentReaderSessionIdRef = useRef<string | null>(null)
   const currentEnhancementGroupIdRef = useRef<string | null>(null)
-  const currentReaderDocumentRef = useRef<Document | null>(null)
+  const currentReaderDocumentsRef = useRef(new Set<Document>())
   const currentRenderTokenRef = useRef(0)
-  const documentActivityCleanupRef = useRef<(() => void) | null>(null)
+  const documentActivityCleanupRef = useRef(new Map<Document, () => void>())
   const idleTimerRef = useRef<number | undefined>(undefined)
+  const readerUiRevealTimerRef = useRef<number | undefined>(undefined)
   const idleGenerationRef = useRef(0)
   const lastReaderActivityAtRef = useRef(0)
+  const lastReaderWheelAtRef = useRef(0)
+  const pendingImageClickNavigationRef = useRef<number | undefined>(undefined)
+  const readerDirectionRef = useRef<ReaderPageDirection>('rtl')
   const bookImageManifestRef = useRef<ScannedBookImage[]>([])
   const bookImageByHashRef = useRef(new Map<string, ScannedBookImage>())
   const bookImageCachedHashesRef = useRef(new Set<string>())
@@ -351,11 +588,39 @@ export function ReaderPage() {
         'line-height': String(lineHeight),
         margin: '0',
       },
+      'html.prismpage-image-page, body.prismpage-image-page': {
+        background: 'transparent !important',
+        height: '100% !important',
+        margin: '0 !important',
+        overflow: 'hidden !important',
+        padding: '0 !important',
+        width: '100% !important',
+      },
+      'html.prismpage-image-page body': {
+        'align-items': 'center !important',
+        display: 'flex !important',
+        'justify-content': 'center !important',
+        'min-height': '100vh !important',
+        overflow: 'hidden !important',
+      },
+      'html.prismpage-image-page body > *': {
+        'max-height': '100vh !important',
+        'max-width': '100vw !important',
+      },
       img: {
         cursor: 'zoom-in',
         margin: '0 auto',
         'max-height': '100vh',
         'object-fit': 'contain',
+      },
+      'html.prismpage-image-page img, html.prismpage-image-page svg': {
+        display: 'block !important',
+        height: 'auto !important',
+        margin: 'auto !important',
+        'max-height': '100vh !important',
+        'max-width': '100vw !important',
+        'object-fit': 'contain !important',
+        width: 'auto !important',
       },
     })
   }, [fontScale, lineHeight])
@@ -414,6 +679,80 @@ export function ReaderPage() {
     enhancedImageCacheOrderRef.current = []
     bookImageScanTokenRef.current += 1
   }, [])
+
+  const clearPendingImageClickNavigation = useCallback(() => {
+    if (pendingImageClickNavigationRef.current !== undefined) {
+      window.clearTimeout(pendingImageClickNavigationRef.current)
+      pendingImageClickNavigationRef.current = undefined
+    }
+  }, [])
+
+  const clearReaderUiRevealTimer = useCallback(() => {
+    if (readerUiRevealTimerRef.current !== undefined) {
+      window.clearTimeout(readerUiRevealTimerRef.current)
+      readerUiRevealTimerRef.current = undefined
+    }
+  }, [])
+
+  const revealReaderUiTemporarily = useCallback(
+    (durationMs = 1400) => {
+      clearReaderUiRevealTimer()
+      setIsReaderUiActive(true)
+      readerUiRevealTimerRef.current = window.setTimeout(() => {
+        readerUiRevealTimerRef.current = undefined
+        setIsReaderUiActive(false)
+      }, durationMs)
+    },
+    [clearReaderUiRevealTimer],
+  )
+
+  const cleanupReaderDocuments = useCallback(() => {
+    for (const cleanup of documentActivityCleanupRef.current.values()) {
+      cleanup()
+    }
+
+    documentActivityCleanupRef.current.clear()
+    currentReaderDocumentsRef.current.clear()
+  }, [])
+
+  const pruneReaderDocuments = useCallback(() => {
+    for (const document of Array.from(currentReaderDocumentsRef.current)) {
+      if (isReaderDocumentConnected(document)) {
+        continue
+      }
+
+      documentActivityCleanupRef.current.get(document)?.()
+      documentActivityCleanupRef.current.delete(document)
+      currentReaderDocumentsRef.current.delete(document)
+    }
+  }, [])
+
+  const getActiveReaderDocuments = useCallback(() => {
+    pruneReaderDocuments()
+
+    const documents = new Set<Document>()
+
+    for (const document of currentReaderDocumentsRef.current) {
+      if (isReaderDocumentConnected(document)) {
+        documents.add(document)
+      }
+    }
+
+    const rendition = renditionRef.current
+    if (rendition?.getContents) {
+      try {
+        for (const document of getDocumentsFromContents(rendition.getContents())) {
+          if (isReaderDocumentConnected(document)) {
+            documents.add(document)
+          }
+        }
+      } catch {
+        // epub.js can briefly reject content reads while views are being replaced.
+      }
+    }
+
+    return Array.from(documents)
+  }, [pruneReaderDocuments])
 
   const rememberEnhancedImageDataUrl = useCallback((cacheKey: string, dataUrl: string) => {
     enhancedImageCacheRef.current.set(cacheKey, dataUrl)
@@ -483,13 +822,13 @@ export function ReaderPage() {
     ) => {
       const sessionId = readerSessionRef.current
       const readerSessionId = currentReaderSessionIdRef.current
-      const document = currentReaderDocumentRef.current
+      const documents = getActiveReaderDocuments()
       const renderToken = currentRenderTokenRef.current
       const settings = autoEnhanceSettingsRef.current
 
       if (
         !readerSessionId ||
-        !document ||
+        documents.length === 0 ||
         !settings.autoEnhanceVisibleImages ||
         currentEnhancementGroupIdRef.current !== runId
       ) {
@@ -498,20 +837,21 @@ export function ReaderPage() {
 
       const matches: Array<{ image: ReaderImageElement; originalInfo: OriginalImageInfo }> = []
 
-      for (const image of getReaderImageElements(document).filter(isVisibleImage)) {
-        const originalInfo = await prepareOriginalImageInfo(image)
+      for (const document of documents) {
+        for (const image of getReaderImageElements(document).filter(isVisibleImage)) {
+          const originalInfo = await prepareOriginalImageInfo(image)
 
-        if (
-          !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
-          currentEnhancementGroupIdRef.current !== runId ||
-          document !== currentReaderDocumentRef.current ||
-          renderToken !== currentRenderTokenRef.current
-        ) {
-          return false
-        }
+          if (
+            !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
+            currentEnhancementGroupIdRef.current !== runId ||
+            renderToken !== currentRenderTokenRef.current
+          ) {
+            return false
+          }
 
-        if (originalInfo.imageHash === imageHash) {
-          matches.push({ image, originalInfo })
+          if (originalInfo.imageHash === imageHash) {
+            matches.push({ image, originalInfo })
+          }
         }
       }
 
@@ -525,7 +865,6 @@ export function ReaderPage() {
         !dataUrl ||
         !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
         currentEnhancementGroupIdRef.current !== runId ||
-        document !== currentReaderDocumentRef.current ||
         renderToken !== currentRenderTokenRef.current
       ) {
         return false
@@ -559,7 +898,12 @@ export function ReaderPage() {
 
       return applied
     },
-    [isCurrentReaderSessionKey, prepareOriginalImageInfo, readEnhancedImageForDisplay],
+    [
+      getActiveReaderDocuments,
+      isCurrentReaderSessionKey,
+      prepareOriginalImageInfo,
+      readEnhancedImageForDisplay,
+    ],
   )
 
   const enqueueBookImage = useCallback((image: ScannedBookImage, priority: 'visible' | 'precompute') => {
@@ -774,11 +1118,11 @@ export function ReaderPage() {
     const targetBookId = activeBookIdRef.current
     const readerSessionId = currentReaderSessionIdRef.current
     const runId = currentEnhancementGroupIdRef.current
-    const document = currentReaderDocumentRef.current
+    const documents = getActiveReaderDocuments()
     const renderToken = currentRenderTokenRef.current
     const settings = autoEnhanceSettingsRef.current
 
-    if (!targetBookId || !readerSessionId || !runId || !document) {
+    if (!targetBookId || !readerSessionId || !runId || documents.length === 0) {
       return
     }
 
@@ -798,7 +1142,9 @@ export function ReaderPage() {
       return
     }
 
-    const visibleImages = getReaderImageElements(document).filter(isVisibleImage)
+    const visibleImages = documents.flatMap((document) =>
+      getReaderImageElements(document).filter(isVisibleImage),
+    )
 
     if (visibleImages.length === 0) {
       setAutoEnhanceStatusForSession(sessionId, targetBookId, {
@@ -817,7 +1163,6 @@ export function ReaderPage() {
       if (
         !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
         currentEnhancementGroupIdRef.current !== runId ||
-        document !== currentReaderDocumentRef.current ||
         renderToken !== currentRenderTokenRef.current
       ) {
         return
@@ -845,7 +1190,6 @@ export function ReaderPage() {
       if (
         !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId) ||
         currentEnhancementGroupIdRef.current !== runId ||
-        document !== currentReaderDocumentRef.current ||
         renderToken !== currentRenderTokenRef.current
       ) {
         return
@@ -900,6 +1244,7 @@ export function ReaderPage() {
     })
   }, [
     enqueueBookImage,
+    getActiveReaderDocuments,
     isCurrentReaderSessionKey,
     prepareOriginalImageInfo,
     readEnhancedImageForDisplay,
@@ -1064,22 +1409,260 @@ export function ReaderPage() {
     })
   }, [restartIdleAutoEnhanceTimer])
 
+  const navigateReaderPage = useCallback(
+    (direction: ReaderNavigationDirection) => {
+      const rendition = renditionRef.current
+
+      if (!rendition) {
+        return false
+      }
+
+      handleReaderActivity()
+      void (direction === 'next' ? rendition.next() : rendition.prev())
+
+      return true
+    },
+    [handleReaderActivity],
+  )
+
+  const navigateReaderPageFromPoint = useCallback(
+    (clientX: number, width: number) => {
+      const navigationDirection = getClickNavigationDirection(
+        clientX,
+        width,
+        readerDirectionRef.current,
+      )
+
+      return navigateReaderPage(navigationDirection)
+    },
+    [navigateReaderPage],
+  )
+
+  const scheduleImageClickNavigation = useCallback(
+    (clientX: number, width: number) => {
+      clearPendingImageClickNavigation()
+      pendingImageClickNavigationRef.current = window.setTimeout(() => {
+        pendingImageClickNavigationRef.current = undefined
+        navigateReaderPageFromPoint(clientX, width)
+      }, IMAGE_CLICK_NAVIGATION_DELAY_MS)
+    },
+    [clearPendingImageClickNavigation, navigateReaderPageFromPoint],
+  )
+
+  const navigateReaderPageByWheel = useCallback(
+    (deltaY: number) => {
+      if (Math.abs(deltaY) < 8) {
+        return false
+      }
+
+      const now = Date.now()
+      if (now - lastReaderWheelAtRef.current < READER_WHEEL_THROTTLE_MS) {
+        return false
+      }
+
+      lastReaderWheelAtRef.current = now
+      clearPendingImageClickNavigation()
+
+      return navigateReaderPage(deltaY > 0 ? 'next' : 'prev')
+    },
+    [clearPendingImageClickNavigation, navigateReaderPage],
+  )
+
+  const handleReaderDocumentClick = useCallback(
+    (event: MouseEvent) => {
+      handleReaderActivity()
+
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.detail > 1 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isReaderInteractiveTarget(event.target)
+      ) {
+        return
+      }
+
+      const selection = event.view?.getSelection()
+      if (selection && !selection.isCollapsed) {
+        return
+      }
+
+      const readerPoint = getReaderRelativePointFromDocumentEvent(event, containerRef.current)
+
+      if (getReaderImageFromTarget(event.target)) {
+        scheduleImageClickNavigation(readerPoint.x, readerPoint.width)
+        return
+      }
+
+      clearPendingImageClickNavigation()
+      navigateReaderPageFromPoint(readerPoint.x, readerPoint.width)
+    },
+    [
+      clearPendingImageClickNavigation,
+      handleReaderActivity,
+      navigateReaderPageFromPoint,
+      scheduleImageClickNavigation,
+    ],
+  )
+
+  const handleReaderDocumentWheel = useCallback(
+    (event: WheelEvent) => {
+      handleReaderActivity()
+
+      if (
+        event.defaultPrevented ||
+        isReaderInteractiveTarget(event.target) ||
+        Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+      ) {
+        return
+      }
+
+      if (navigateReaderPageByWheel(event.deltaY)) {
+        event.preventDefault()
+      }
+    },
+    [handleReaderActivity, navigateReaderPageByWheel],
+  )
+
+  const handleReaderDocumentPointerDown = useCallback(
+    (event: PointerEvent) => {
+      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+        return
+      }
+
+      const readerPoint = getReaderRelativePointFromDocumentEvent(event, containerRef.current)
+
+      revealReaderUiTemporarily(isReaderPointNearEdge(readerPoint) ? 1800 : 900)
+    },
+    [revealReaderUiTemporarily],
+  )
+
+  const handleReaderDocumentPointerMove = useCallback(
+    (event: PointerEvent) => {
+      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+        return
+      }
+
+      const readerPoint = getReaderRelativePointFromDocumentEvent(event, containerRef.current)
+
+      if (isReaderPointNearEdge(readerPoint)) {
+        revealReaderUiTemporarily(1400)
+      }
+    },
+    [revealReaderUiTemporarily],
+  )
+
+  const handleReaderStageClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.detail > 1 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isReaderInteractiveTarget(event.target)
+      ) {
+        return
+      }
+
+      const selection = window.getSelection()
+      if (selection && !selection.isCollapsed) {
+        return
+      }
+
+      clearPendingImageClickNavigation()
+      const rect = event.currentTarget.getBoundingClientRect()
+      navigateReaderPageFromPoint(event.clientX - rect.left, rect.width)
+    },
+    [clearPendingImageClickNavigation, navigateReaderPageFromPoint],
+  )
+
+  const handleReaderStageWheel = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      if (
+        event.defaultPrevented ||
+        isReaderInteractiveTarget(event.target) ||
+        Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+      ) {
+        return
+      }
+
+      if (navigateReaderPageByWheel(event.deltaY)) {
+        event.preventDefault()
+      }
+    },
+    [navigateReaderPageByWheel],
+  )
+
+  const isReaderPointerNearEdge = useCallback((event: {
+    clientX: number
+    clientY: number
+    currentTarget: HTMLElement
+  }) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+
+    return (
+      event.clientY - rect.top <= READER_EDGE_REVEAL_PX ||
+      rect.bottom - event.clientY <= READER_EDGE_REVEAL_PX ||
+      event.clientX - rect.left <= READER_EDGE_REVEAL_PX ||
+      rect.right - event.clientX <= READER_EDGE_REVEAL_PX
+    )
+  }, [])
+
+  const handleReaderShellMouseMove = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    clearReaderUiRevealTimer()
+    setIsReaderUiActive(isReaderPointerNearEdge(event))
+  }, [clearReaderUiRevealTimer, isReaderPointerNearEdge])
+
+  const handleReaderShellPointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (event.pointerType !== 'mouse' && isReaderPointerNearEdge(event)) {
+      revealReaderUiTemporarily()
+    }
+  }, [isReaderPointerNearEdge, revealReaderUiTemporarily])
+
+  const handleReaderShellPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const nearEdge =
+      isReaderPointerNearEdge(event) || event.pointerType === 'touch' || event.pointerType === 'pen'
+
+    if (nearEdge) {
+      revealReaderUiTemporarily()
+    }
+  }, [isReaderPointerNearEdge, revealReaderUiTemporarily])
+
   const bindDocumentActivityListeners = useCallback(
     (document: Document) => {
       const view = document.defaultView
       const listenerOptions = { capture: true }
+      const wheelListenerOptions = { capture: true, passive: false }
 
-      document.addEventListener('click', handleReaderActivity, listenerOptions)
+      document.addEventListener('click', handleReaderDocumentClick, listenerOptions)
       document.addEventListener('keydown', handleReaderActivity, listenerOptions)
+      document.addEventListener('pointerdown', handleReaderDocumentPointerDown, listenerOptions)
+      document.addEventListener('pointermove', handleReaderDocumentPointerMove, listenerOptions)
+      document.addEventListener('wheel', handleReaderDocumentWheel, wheelListenerOptions)
       view?.addEventListener('scroll', handleReaderActivity, listenerOptions)
 
       return () => {
-        document.removeEventListener('click', handleReaderActivity, listenerOptions)
+        document.removeEventListener('click', handleReaderDocumentClick, listenerOptions)
         document.removeEventListener('keydown', handleReaderActivity, listenerOptions)
+        document.removeEventListener('pointerdown', handleReaderDocumentPointerDown, listenerOptions)
+        document.removeEventListener('pointermove', handleReaderDocumentPointerMove, listenerOptions)
+        document.removeEventListener('wheel', handleReaderDocumentWheel, wheelListenerOptions)
         view?.removeEventListener('scroll', handleReaderActivity, listenerOptions)
       }
     },
-    [handleReaderActivity],
+    [
+      handleReaderActivity,
+      handleReaderDocumentClick,
+      handleReaderDocumentPointerDown,
+      handleReaderDocumentPointerMove,
+      handleReaderDocumentWheel,
+    ],
   )
 
   const openZoomedImage = useCallback(async (image: ReaderImageElement) => {
@@ -1125,6 +1708,46 @@ export function ReaderPage() {
       }
     }
   }, [isCurrentReaderSessionKey, prepareOriginalImageInfo, readEnhancedImageForDisplay])
+
+  const registerReaderDocument = useCallback(
+    (document: Document) => {
+      pruneReaderDocuments()
+      currentReaderDocumentsRef.current.add(document)
+
+      if (!documentActivityCleanupRef.current.has(document)) {
+        documentActivityCleanupRef.current.set(document, bindDocumentActivityListeners(document))
+      }
+
+      applyImagePageClass(document)
+
+      const images = getReaderImageElements(document)
+
+      for (const image of images) {
+        if (getImageDataAttribute(image, 'prismpageClickBound') === 'true') {
+          continue
+        }
+
+        setImageDataAttribute(image, 'prismpageClickBound', 'true')
+        image.addEventListener('load', () => applyImagePageClass(document), {
+          once: true,
+        })
+        image.addEventListener('dblclick', (event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          clearPendingImageClickNavigation()
+          handleReaderActivity()
+          void openZoomedImage(image)
+        })
+      }
+    },
+    [
+      bindDocumentActivityListeners,
+      clearPendingImageClickNavigation,
+      handleReaderActivity,
+      openZoomedImage,
+      pruneReaderDocuments,
+    ],
+  )
 
   useEffect(() => {
     autoEnhanceSettingsRef.current = {
@@ -1256,6 +1879,9 @@ export function ReaderPage() {
     let renderedHandler:
       | ((_section: unknown, contents: { document: Document }) => void)
       | null = null
+    let resizeFrameId: number | undefined
+    let resizeObserver: ResizeObserver | null = null
+    let resizeFallbackHandler: (() => void) | null = null
 
     mountedRef.current = true
     readerSessionRef.current += 1
@@ -1267,7 +1893,7 @@ export function ReaderPage() {
     const isActiveReader = () => isCurrentReaderSession(sessionId, currentBookId)
     setZoomedImage(null)
     setIsEnhancing(false)
-    currentReaderDocumentRef.current = null
+    cleanupReaderDocuments()
     currentRenderTokenRef.current += 1
     originalImageInfoRef.current = new WeakMap<ReaderImageElement, OriginalImageInfo>()
     resetBookEnhancementState()
@@ -1296,6 +1922,15 @@ export function ReaderPage() {
           return
         }
 
+        const metadata = await epubBook.loaded.metadata
+        if (!isActiveReader()) {
+          epubBook.destroy()
+          return
+        }
+
+        const readingDirection = getReaderDirection(metadata)
+        readerDirectionRef.current = readingDirection
+
         const navigation = await epubBook.loaded.navigation
         if (!isActiveReader()) {
           epubBook.destroy()
@@ -1305,10 +1940,13 @@ export function ReaderPage() {
         setToc(flattenNavigation(navigation.toc as EpubNavigationItem[]))
 
         const rendition = epubBook.renderTo(containerRef.current!, {
+          defaultDirection: readingDirection,
           flow: 'paginated',
           height: '100%',
+          minSpreadWidth: READER_SPREAD_MIN_WIDTH,
+          spread: getReaderSpreadMode(containerRef.current!),
           width: '100%',
-        })
+        }) as ReaderLayoutRendition
 
         if (!isActiveReader()) {
           rendition.destroy()
@@ -1317,10 +1955,51 @@ export function ReaderPage() {
         }
 
         renditionRef.current = rendition
+        rendition.direction(readingDirection)
+        const syncReaderLayout = () => {
+          const element = containerRef.current
+
+          if (!element) {
+            return
+          }
+
+          const { height, width } = getReaderViewportSize(element)
+          if (width <= 0 || height <= 0) {
+            return
+          }
+
+          rendition.spread(getReaderSpreadMode(element), READER_SPREAD_MIN_WIDTH)
+          rendition.resize(width, height)
+
+          for (const document of getActiveReaderDocuments()) {
+            applyImagePageClass(document)
+          }
+        }
+        const scheduleReaderLayoutSync = () => {
+          if (resizeFrameId !== undefined) {
+            window.cancelAnimationFrame(resizeFrameId)
+          }
+
+          resizeFrameId = window.requestAnimationFrame(() => {
+            resizeFrameId = undefined
+            syncReaderLayout()
+          })
+        }
+
+        syncReaderLayout()
+        if (typeof ResizeObserver !== 'undefined') {
+          resizeObserver = new ResizeObserver(scheduleReaderLayoutSync)
+          resizeObserver.observe(containerRef.current!)
+        } else {
+          resizeFallbackHandler = scheduleReaderLayoutSync
+          window.addEventListener('resize', resizeFallbackHandler)
+        }
+
         setReaderReady(true)
         applyReaderTheme()
 
         relocationHandler = (locationInfo) => {
+          pruneReaderDocuments()
           const nextLocation = locationInfo.start.cfi
           const nextProgress = Math.round((locationInfo.percentage ?? 0) * 100)
 
@@ -1337,23 +2016,8 @@ export function ReaderPage() {
 
         renderedHandler = (_section, contents) => {
           currentRenderTokenRef.current += 1
-          currentReaderDocumentRef.current = contents.document
-          documentActivityCleanupRef.current?.()
-          documentActivityCleanupRef.current = bindDocumentActivityListeners(contents.document)
-
-          const images = getReaderImageElements(contents.document)
-
-          for (const image of images) {
-            if (getImageDataAttribute(image, 'prismpageClickBound') === 'true') {
-              continue
-            }
-
-            setImageDataAttribute(image, 'prismpageClickBound', 'true')
-            image.addEventListener('click', () => {
-              handleReaderActivity()
-              void openZoomedImage(image)
-            })
-          }
+          pruneReaderDocuments()
+          registerReaderDocument(contents.document)
 
           void refreshVisibleImages()
           restartIdleAutoEnhanceTimer()
@@ -1392,11 +2056,18 @@ export function ReaderPage() {
         window.clearTimeout(idleTimerRef.current)
         idleTimerRef.current = undefined
       }
+      if (resizeFrameId !== undefined) {
+        window.cancelAnimationFrame(resizeFrameId)
+      }
+      resizeObserver?.disconnect()
+      if (resizeFallbackHandler) {
+        window.removeEventListener('resize', resizeFallbackHandler)
+      }
+      clearPendingImageClickNavigation()
+      clearReaderUiRevealTimer()
       idleGenerationRef.current += 1
-      currentReaderDocumentRef.current = null
       currentRenderTokenRef.current += 1
-      documentActivityCleanupRef.current?.()
-      documentActivityCleanupRef.current = null
+      cleanupReaderDocuments()
       cancelEnhancementsForGroup(endingEnhancementGroupId)
       if (relocationHandler && renditionRef.current) {
         renditionRef.current.off('relocated', relocationHandler as (...args: never[]) => void)
@@ -1413,14 +2084,18 @@ export function ReaderPage() {
     }
   }, [
     applyReaderTheme,
-    bindDocumentActivityListeners,
     buildReaderSessionId,
     cancelEnhancementsForGroup,
+    clearPendingImageClickNavigation,
+    clearReaderUiRevealTimer,
+    cleanupReaderDocuments,
     currentBookId,
+    getActiveReaderDocuments,
     handleReaderActivity,
     isCurrentReaderSession,
-    openZoomedImage,
     patchBook,
+    pruneReaderDocuments,
+    registerReaderDocument,
     refreshVisibleImages,
     resetBookEnhancementState,
     restartIdleAutoEnhanceTimer,
@@ -1599,6 +2274,9 @@ export function ReaderPage() {
   ])
 
   const toolbarDisabled = !readerReady || loading
+  const readerShellClassName = `reader-focus-shell${
+    isReaderUiActive || isTocOpen ? ' is-reader-ui-active' : ''
+  }`
 
   if (!book) {
     return (
@@ -1617,16 +2295,20 @@ export function ReaderPage() {
 
   return (
     <div className="reader-page">
-      <section className="reader-focus-shell">
+      <section
+        className={readerShellClassName}
+        onFocusCapture={() => setIsReaderUiActive(true)}
+        onMouseLeave={() => setIsReaderUiActive(false)}
+        onMouseMove={handleReaderShellMouseMove}
+        onPointerDown={handleReaderShellPointerDown}
+        onPointerMove={handleReaderShellPointerMove}
+      >
         <div className="reader-topbar">
           <Link to="/" className="reader-icon-button" aria-label="ライブラリへ戻る">
             <ArrowLeft size={19} />
           </Link>
 
-          <div className="reader-title-strip">
-            <strong>{book.title}</strong>
-            <span>{book.author ?? '著者情報なし'}</span>
-          </div>
+          <div className="reader-topbar-spacer" aria-hidden="true" />
 
           <div className="reader-topbar-actions">
             <button
@@ -1648,7 +2330,11 @@ export function ReaderPage() {
 
         {error ? <div className="reader-floating-message is-error">{error}</div> : null}
 
-        <div className="reader-stage reader-stage--focus">
+        <div
+          className="reader-stage reader-stage--focus"
+          onClick={handleReaderStageClick}
+          onWheel={handleReaderStageWheel}
+        >
           {loading ? (
             <div className="reader-loading">
               <LoaderCircle size={34} className="animate-spin" />
@@ -1694,10 +2380,12 @@ export function ReaderPage() {
           </button>
         </div>
 
-        <div className={`reader-ai-status is-${autoEnhanceStatus.tone}`}>
-          <ImageUpscale size={16} />
-          <span>{autoEnhanceStatus.message}</span>
-        </div>
+        {autoEnhanceStatus.tone === 'error' ? (
+          <div className={`reader-ai-status is-${autoEnhanceStatus.tone}`}>
+            <ImageUpscale size={16} />
+            <span>{autoEnhanceStatus.message}</span>
+          </div>
+        ) : null}
 
         {isTocOpen ? (
           <aside className="reader-toc-panel" aria-label="目次">

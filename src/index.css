@@ -872,9 +872,48 @@ img {
   border-radius: 10px;
 }
 
+.reader-topbar,
+.reader-bottom-bar {
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.reader-topbar {
+  transform: translateY(-8px);
+}
+
+.reader-bottom-bar {
+  transform: translate(-50%, 8px);
+}
+
+.reader-focus-shell.is-reader-ui-active .reader-topbar,
+.reader-focus-shell.is-reader-ui-active .reader-bottom-bar,
+.reader-focus-shell:focus-within .reader-topbar,
+.reader-focus-shell:focus-within .reader-bottom-bar {
+  opacity: 0.94;
+  pointer-events: auto;
+}
+
+.reader-focus-shell.is-reader-ui-active .reader-topbar,
+.reader-focus-shell:focus-within .reader-topbar {
+  transform: translateY(0);
+}
+
+.reader-focus-shell.is-reader-ui-active .reader-bottom-bar,
+.reader-focus-shell:focus-within .reader-bottom-bar {
+  transform: translateX(-50%);
+}
+
 .reader-topbar-actions {
   display: flex;
   gap: 8px;
+}
+
+.reader-topbar-spacer {
+  min-width: 0;
 }
 
 .reader-title-strip {
@@ -929,7 +968,6 @@ img {
   width: min(440px, calc(100vw - 32px));
   padding: 6px;
   border-radius: 10px;
-  transform: translateX(-50%);
 }
 
 .reader-progress {
