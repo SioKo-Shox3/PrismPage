@@ -1,6 +1,6 @@
 [package]
 name = "prismpage"
-version = "0.1.3"
+version = "0.1.4"
 description = "An image-focused EPUB viewer with AI super-resolution support"
 authors = ["SioKo-Shox3"]
 license = ""

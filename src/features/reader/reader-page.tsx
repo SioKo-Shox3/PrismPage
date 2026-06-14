@@ -97,6 +97,9 @@ interface ReaderMetadataWithDirection {
 interface ReaderLayoutRendition extends EpubRendition {
   direction(dir: ReaderPageDirection): void
   getContents?(): unknown
+  manager?: {
+    resize?: (width: number, height: number) => void
+  }
   resize(width: number, height: number): void
   spread(spread: ReaderSpreadMode, min?: number): void
 }
@@ -284,6 +287,18 @@ function getReaderSpreadMode(element: HTMLElement): ReaderSpreadMode {
   const { height, width } = getReaderViewportSize(element)
 
   return shouldUseReaderSpread(width, height) ? 'always' : 'none'
+}
+
+function resizeReaderRenditionIfReady(
+  rendition: ReaderLayoutRendition,
+  width: number,
+  height: number,
+) {
+  if (!rendition.manager?.resize) {
+    return
+  }
+
+  rendition.resize(width, height)
 }
 
 function getReaderDirection(metadata: unknown): ReaderPageDirection {
@@ -1969,7 +1984,7 @@ export function ReaderPage() {
           }
 
           rendition.spread(getReaderSpreadMode(element), READER_SPREAD_MIN_WIDTH)
-          rendition.resize(width, height)
+          resizeReaderRenditionIfReady(rendition, width, height)
 
           for (const document of getActiveReaderDocuments()) {
             applyImagePageClass(document)
