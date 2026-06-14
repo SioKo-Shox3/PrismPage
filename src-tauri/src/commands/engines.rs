@@ -106,11 +106,16 @@ pub async fn enhance_book_asset_image(
 }
 
 #[tauri::command]
-pub fn read_enhanced_book_image(
+pub async fn read_enhanced_book_image(
     app: AppHandle,
     request: ReadEnhancedBookImageRequest,
 ) -> Result<Option<String>, String> {
-    engine_service::read_enhanced_book_image(&app, request).map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        engine_service::read_enhanced_book_image(&app, request)
+    })
+    .await
+    .map_err(|error| format!("高精細画像キャッシュの読み込みに失敗しました: {error}"))?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

@@ -2203,6 +2203,7 @@ export function ReaderPage() {
       return
     }
 
+    const targetBookId = currentBookId
     const sessionId = readerSessionRef.current
     const readerSessionId = currentReaderSessionIdRef.current
     const settings = autoEnhanceSettingsRef.current
@@ -2210,133 +2211,179 @@ export function ReaderPage() {
 
     currentRenderTokenRef.current += 1
     updateImageSpreadLocation(imageSpreadIndex, imageSpreadManifest.length)
+    const visibleImageSpreadKey = visibleImageSpreadItems
+      .map((item) => `${item.imageHash}:${item.assetPath}`)
+      .join('\n')
 
     for (const image of visibleImageSpreadItems) {
-      void (async () => {
-        const isCurrentImageSpreadLoad = () =>
-          Boolean(readerSessionId) &&
-          isCurrentReaderSessionKey(sessionId, currentBookId, readerSessionId ?? '')
-
-        const imageHash = image.imageHash
-        const cacheKey = buildEnhanceKey(
-          imageHash,
-          settings.preferredEngine,
-          settings.zoomEnhancementScale,
-        )
-        const shouldReadEnhanced =
-          settings.enhancementEnabled &&
-          settings.autoEnhanceVisibleImages &&
-          !enhancedImageSpreadDataUrls[imageHash] &&
-          !imageSpreadEnhancedCacheChecksRef.current.has(cacheKey)
-        const shouldReadOriginal =
-          !imageAssetDataUrls[imageHash] &&
-          !imageSpreadLoadErrors[imageHash]
-
-        if (shouldReadEnhanced) {
-          imageSpreadEnhancedCacheChecksRef.current.add(cacheKey)
+      const isCurrentImageSpreadSession = () =>
+        Boolean(readerSessionId) &&
+        readerModeRef.current === 'image-spread' &&
+        isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId ?? '')
+      const isCurrentVisibleImageSpreadRun = () => {
+        if (!isCurrentImageSpreadSession()) {
+          return false
         }
 
-        const enhancedDataUrlPromise = shouldReadEnhanced
-          ? readEnhancedImageForDisplay(
-              currentBookId,
-              settings.preferredEngine,
-              settings.zoomEnhancementScale,
-              imageHash,
-            ).catch(() => null)
-          : Promise.resolve<string | null>(null)
-        const originalImagePromise = shouldReadOriginal
-          ? readBookAssetImage({
-              bookId: currentBookId,
-              assetPath: image.assetPath,
-            })
-              .then((original) => original.imageDataUrl)
-              .catch((assetError) => {
-                if (enhancedImageSpreadDataUrls[imageHash]) {
-                  return null
-                }
+        const currentVisibleKey = imageSpreadManifestRef.current
+          .slice(
+            imageSpreadIndexRef.current,
+            imageSpreadIndexRef.current + imageSpreadPageCountRef.current,
+          )
+          .map((item) => `${item.imageHash}:${item.assetPath}`)
+          .join('\n')
 
-                throw assetError
-              })
-          : Promise.resolve<string | null>(null)
+        return currentVisibleKey === visibleImageSpreadKey
+      }
 
-        const [enhancedResult, originalResult] = await Promise.allSettled([
-          enhancedDataUrlPromise,
-          originalImagePromise,
-        ])
+      const imageHash = image.imageHash
+      const cacheKey = buildEnhanceKey(
+        imageHash,
+        settings.preferredEngine,
+        settings.zoomEnhancementScale,
+      )
+      const shouldReadOriginal =
+        !imageAssetDataUrls[imageHash] &&
+        !imageSpreadLoadErrors[imageHash]
+      const shouldCheckEnhancedCache =
+        settings.enhancementEnabled &&
+        (settings.autoEnhanceVisibleImages || settings.precomputeBookImages) &&
+        !enhancedImageSpreadDataUrls[imageHash] &&
+        !imageSpreadEnhancedCacheChecksRef.current.has(cacheKey)
 
-        if (!isCurrentImageSpreadLoad()) {
+      const scheduleEnhancedCacheCheck = () => {
+        if (imageSpreadEnhancedCacheChecksRef.current.has(cacheKey)) {
           return
         }
 
-        const hasEnhancedDataUrl =
-          enhancedResult.status === 'fulfilled' && Boolean(enhancedResult.value)
-        const hasKnownEnhancedDataUrl =
-          hasEnhancedDataUrl || Boolean(enhancedImageSpreadDataUrls[imageHash])
+        imageSpreadEnhancedCacheChecksRef.current.add(cacheKey)
+        window.setTimeout(() => {
+          if (!isCurrentVisibleImageSpreadRun()) {
+            imageSpreadEnhancedCacheChecksRef.current.delete(cacheKey)
+            return
+          }
 
-        if (enhancedResult.status === 'fulfilled' && enhancedResult.value) {
-          const enhancedDataUrl = enhancedResult.value
+          void readEnhancedImageForDisplay(
+            targetBookId,
+            settings.preferredEngine,
+            settings.zoomEnhancementScale,
+            imageHash,
+          )
+            .then((enhancedDataUrl) => {
+              if (!isCurrentImageSpreadSession()) {
+                return
+              }
 
-          setEnhancedImageSpreadDataUrls((current) => ({
-            ...current,
-            [imageHash]: enhancedDataUrl,
-          }))
-          setImageSpreadLoadErrors((current) => {
-            if (!current[imageHash]) {
-              return current
+              if (enhancedDataUrl) {
+                if (settings.autoEnhanceVisibleImages) {
+                  setEnhancedImageSpreadDataUrls((current) => {
+                    if (current[imageHash] === enhancedDataUrl) {
+                      return current
+                    }
+
+                    return {
+                      ...current,
+                      [imageHash]: enhancedDataUrl,
+                    }
+                  })
+                  setImageSpreadLoadErrors((current) => {
+                    if (!current[imageHash]) {
+                      return current
+                    }
+
+                    const next = { ...current }
+                    delete next[imageHash]
+                    return next
+                  })
+                }
+
+                return
+              }
+
+              if (
+                runId &&
+                settings.enhancementEnabled &&
+                (settings.autoEnhanceVisibleImages || settings.precomputeBookImages) &&
+                enqueueBookImage(image, 'visible')
+              ) {
+                processBookImageQueueRef.current(runId)
+              }
+            })
+            .catch(() => {
+              if (
+                !isCurrentImageSpreadSession() ||
+                !runId ||
+                !settings.enhancementEnabled ||
+                (!settings.autoEnhanceVisibleImages && !settings.precomputeBookImages)
+              ) {
+                return
+              }
+
+              if (enqueueBookImage(image, 'visible')) {
+                processBookImageQueueRef.current(runId)
+              }
+            })
+        }, 100)
+      }
+
+      if (shouldReadOriginal) {
+        void readBookAssetImage({
+          bookId: targetBookId,
+          assetPath: image.assetPath,
+        })
+          .then((original) => {
+            if (!isCurrentImageSpreadSession()) {
+              return
             }
 
-            const next = { ...current }
-            delete next[imageHash]
-            return next
+            setImageAssetDataUrls((current) => {
+              if (current[imageHash] === original.imageDataUrl) {
+                return current
+              }
+
+              return {
+                ...current,
+                [imageHash]: original.imageDataUrl,
+              }
+            })
+            setImageSpreadLoadErrors((current) => {
+              if (!current[imageHash]) {
+                return current
+              }
+
+              const next = { ...current }
+              delete next[imageHash]
+              return next
+            })
+
+            if (shouldCheckEnhancedCache && isCurrentVisibleImageSpreadRun()) {
+              scheduleEnhancedCacheCheck()
+            }
           })
-        }
-
-        if (originalResult.status === 'fulfilled' && originalResult.value) {
-          const originalDataUrl = originalResult.value
-
-          setImageAssetDataUrls((current) => ({
-            ...current,
-            [imageHash]: originalDataUrl,
-          }))
-          setImageSpreadLoadErrors((current) => {
-            if (!current[imageHash]) {
-              return current
+          .catch((assetError) => {
+            if (!isCurrentVisibleImageSpreadRun()) {
+              return
             }
 
-            const next = { ...current }
-            delete next[imageHash]
-            return next
+            setImageSpreadLoadErrors((current) => {
+              if (current[imageHash] || enhancedImageSpreadDataUrls[imageHash]) {
+                return current
+              }
+
+              const message =
+                assetError instanceof Error
+                  ? assetError.message
+                  : '画像の読み込みに失敗しました。'
+
+              return {
+                ...current,
+                [imageHash]: message,
+              }
+            })
           })
-        }
-
-        if (originalResult.status === 'rejected' && !hasKnownEnhancedDataUrl) {
-          setImageSpreadLoadErrors((current) => {
-            if (current[imageHash]) {
-              return current
-            }
-
-            const message =
-              originalResult.reason instanceof Error
-                ? originalResult.reason.message
-                : '画像の読み込みに失敗しました。'
-
-            return {
-              ...current,
-              [imageHash]: message,
-            }
-          })
-        }
-
-        if (
-          !hasKnownEnhancedDataUrl &&
-          runId &&
-          settings.enhancementEnabled &&
-          (settings.autoEnhanceVisibleImages || settings.precomputeBookImages) &&
-          enqueueBookImage(image, 'visible')
-        ) {
-          processBookImageQueueRef.current(runId)
-        }
-      })()
+      } else if (shouldCheckEnhancedCache && imageAssetDataUrls[imageHash]) {
+        scheduleEnhancedCacheCheck()
+      }
     }
 
   }, [
