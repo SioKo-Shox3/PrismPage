@@ -594,11 +594,12 @@ export function ReaderPage() {
   const [location, setLocation] = useState(book?.currentLocation)
   const [progress, setProgress] = useState(Math.round(book?.progressPercentage ?? 0))
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [readerInitializing, setReaderInitializing] = useState(true)
   const [engineStatuses, setEngineStatuses] = useState<EngineStatus[]>([])
   const [zoomedImage, setZoomedImage] = useState<ZoomedImageState | null>(null)
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [readerReady, setReaderReady] = useState(false)
+  const [readerInteractionReady, setReaderInteractionReady] = useState(false)
   const [isReaderUiActive, setIsReaderUiActive] = useState(false)
   const [readerMode, setReaderMode] = useState<ReaderMode>('epub')
   const [readerDirection, setReaderDirection] = useState<ReaderPageDirection>('rtl')
@@ -633,6 +634,7 @@ export function ReaderPage() {
   const imageSpreadIndexRef = useRef(0)
   const imageSpreadPageCountRef = useRef(1)
   const imageSpreadEnhancedCacheChecksRef = useRef(new Set<string>())
+  const canNavigateReaderRef = useRef(false)
   const readerRelocationEdgesRef = useRef({ atEnd: false, atStart: true })
   const bookImageManifestRef = useRef<ScannedBookImage[]>([])
   const bookImageByHashRef = useRef(new Map<string, ScannedBookImage>())
@@ -659,6 +661,11 @@ export function ReaderPage() {
     () => engineStatuses.find((status) => status.id === preferredEngine),
     [engineStatuses, preferredEngine],
   )
+
+  const setReaderNavigationReady = useCallback((ready: boolean) => {
+    canNavigateReaderRef.current = ready
+    setReaderInteractionReady(ready)
+  }, [])
 
   useEffect(() => {
     readerModeRef.current = readerMode
@@ -1633,6 +1640,10 @@ export function ReaderPage() {
 
   const navigateReaderPage = useCallback(
     (direction: ReaderNavigationDirection) => {
+      if (!canNavigateReaderRef.current) {
+        return false
+      }
+
       if (readerModeRef.current === 'image-spread') {
         const totalImages = imageSpreadManifestRef.current.length
 
@@ -2415,6 +2426,9 @@ export function ReaderPage() {
     originalImageInfoRef.current = new WeakMap<ReaderImageElement, OriginalImageInfo>()
     resetBookEnhancementState()
     lastReaderActivityAtRef.current = Date.now()
+    setReaderReady(false)
+    setReaderNavigationReady(false)
+    setReaderInitializing(true)
 
     const loadReader = async () => {
       try {
@@ -2422,7 +2436,8 @@ export function ReaderPage() {
           return
         }
 
-        setLoading(true)
+        setReaderInitializing(true)
+        setReaderNavigationReady(false)
         setError(null)
 
         const base64 = await readBookBase64(currentBookId)
@@ -2498,6 +2513,9 @@ export function ReaderPage() {
               images.filter((image) => image.cached).map((image) => image.imageHash),
             )
             updateImageSpreadLocation(initialImageIndex, images.length)
+            setReaderReady(true)
+            setReaderNavigationReady(true)
+            setReaderInitializing(false)
           }
         } catch {
           if (isActiveReader()) {
@@ -2506,108 +2524,154 @@ export function ReaderPage() {
           }
         }
 
-        const rendition = epubBook.renderTo(containerRef.current!, {
-          defaultDirection: readingDirection,
-          flow: 'paginated',
-          height: '100%',
-          minSpreadWidth: READER_SPREAD_MIN_WIDTH,
-          spread: getReaderSpreadMode(containerRef.current!),
-          width: '100%',
-        }) as ReaderLayoutRendition
+        try {
+          const rendition = epubBook.renderTo(containerRef.current!, {
+            defaultDirection: readingDirection,
+            flow: 'paginated',
+            height: '100%',
+            minSpreadWidth: READER_SPREAD_MIN_WIDTH,
+            spread: getReaderSpreadMode(containerRef.current!),
+            width: '100%',
+          }) as ReaderLayoutRendition
+
+          if (!isActiveReader()) {
+            rendition.destroy()
+            epubBook.destroy()
+            return
+          }
+
+          renditionRef.current = rendition
+          rendition.direction(readingDirection)
+          const syncReaderLayout = () => {
+            const element = containerRef.current
+
+            if (!element) {
+              return
+            }
+
+            const { height, width } = getReaderViewportSize(element)
+            if (width <= 0 || height <= 0) {
+              return
+            }
+
+            rendition.spread(getReaderSpreadMode(element), READER_SPREAD_MIN_WIDTH)
+            setImageSpreadPageCount(getImageSpreadPageCount(element))
+            resizeReaderRenditionIfReady(rendition, width, height)
+
+            for (const document of getActiveReaderDocuments()) {
+              applyImagePageClass(document)
+            }
+          }
+          const scheduleReaderLayoutSync = () => {
+            if (resizeFrameId !== undefined) {
+              window.cancelAnimationFrame(resizeFrameId)
+            }
+
+            resizeFrameId = window.requestAnimationFrame(() => {
+              resizeFrameId = undefined
+              syncReaderLayout()
+            })
+          }
+
+          syncReaderLayout()
+          if (typeof ResizeObserver !== 'undefined') {
+            resizeObserver = new ResizeObserver(scheduleReaderLayoutSync)
+            resizeObserver.observe(containerRef.current!)
+          } else {
+            resizeFallbackHandler = scheduleReaderLayoutSync
+            window.addEventListener('resize', resizeFallbackHandler)
+          }
+
+          applyReaderTheme()
+
+          relocationHandler = (locationInfo) => {
+            pruneReaderDocuments()
+            readerRelocationEdgesRef.current = {
+              atEnd: Boolean((locationInfo as EpubLocationWithEdges).atEnd),
+              atStart: Boolean((locationInfo as EpubLocationWithEdges).atStart),
+            }
+
+            if (readerModeRef.current !== 'epub') {
+              handleReaderActivity()
+              return
+            }
+
+            const nextLocation = locationInfo.start.cfi
+            const nextProgress = Math.round((locationInfo.percentage ?? 0) * 100)
+
+            setLocation(nextLocation)
+            setProgress(nextProgress)
+
+            patchBook(currentBookId, {
+              currentLocation: nextLocation,
+              lastOpenedAt: Date.now(),
+              progressPercentage: nextProgress,
+            })
+            handleReaderActivity()
+          }
+
+          renderedHandler = (_section, contents) => {
+            currentRenderTokenRef.current += 1
+            pruneReaderDocuments()
+            registerReaderDocument(contents.document)
+
+            void refreshVisibleImages()
+            restartIdleAutoEnhanceTimer()
+          }
+
+          rendition.on('relocated', relocationHandler)
+          rendition.on('rendered', renderedHandler)
+          await rendition.display(
+            imageSpreadReaderEnabled ? undefined : getEpubInitialLocation(initialLocation),
+          )
+        } catch (fallbackError) {
+          if (!imageSpreadReaderEnabled) {
+            throw fallbackError
+          }
+
+          if (!isActiveReader()) {
+            return
+          }
+
+          if (resizeFrameId !== undefined) {
+            window.cancelAnimationFrame(resizeFrameId)
+            resizeFrameId = undefined
+          }
+          resizeObserver?.disconnect()
+          resizeObserver = null
+          if (resizeFallbackHandler) {
+            window.removeEventListener('resize', resizeFallbackHandler)
+            resizeFallbackHandler = null
+          }
+          if (relocationHandler && renditionRef.current) {
+            renditionRef.current.off('relocated', relocationHandler as (...args: never[]) => void)
+          }
+          if (renderedHandler && renditionRef.current) {
+            renditionRef.current.off('rendered', renderedHandler as (...args: never[]) => void)
+          }
+          renditionRef.current?.destroy()
+          renditionRef.current = null
+          bookRef.current = null
+          epubBook.destroy()
+          cleanupReaderDocuments()
+          currentRenderTokenRef.current += 1
+          setReaderReady(true)
+          setReaderNavigationReady(true)
+          setReaderInitializing(false)
+        }
 
         if (!isActiveReader()) {
-          rendition.destroy()
-          epubBook.destroy()
           return
         }
 
-        renditionRef.current = rendition
-        rendition.direction(readingDirection)
-        const syncReaderLayout = () => {
-          const element = containerRef.current
-
-          if (!element) {
-            return
-          }
-
-          const { height, width } = getReaderViewportSize(element)
-          if (width <= 0 || height <= 0) {
-            return
-          }
-
-          rendition.spread(getReaderSpreadMode(element), READER_SPREAD_MIN_WIDTH)
-          setImageSpreadPageCount(getImageSpreadPageCount(element))
-          resizeReaderRenditionIfReady(rendition, width, height)
-
-          for (const document of getActiveReaderDocuments()) {
-            applyImagePageClass(document)
-          }
+        if (!imageSpreadReaderEnabled) {
+          setReaderReady(true)
+          setReaderNavigationReady(true)
+          setReaderInitializing(false)
         }
-        const scheduleReaderLayoutSync = () => {
-          if (resizeFrameId !== undefined) {
-            window.cancelAnimationFrame(resizeFrameId)
-          }
-
-          resizeFrameId = window.requestAnimationFrame(() => {
-            resizeFrameId = undefined
-            syncReaderLayout()
-          })
-        }
-
-        syncReaderLayout()
-        if (typeof ResizeObserver !== 'undefined') {
-          resizeObserver = new ResizeObserver(scheduleReaderLayoutSync)
-          resizeObserver.observe(containerRef.current!)
-        } else {
-          resizeFallbackHandler = scheduleReaderLayoutSync
-          window.addEventListener('resize', resizeFallbackHandler)
-        }
-
-        setReaderReady(true)
-        applyReaderTheme()
-
-        relocationHandler = (locationInfo) => {
-          pruneReaderDocuments()
-          readerRelocationEdgesRef.current = {
-            atEnd: Boolean((locationInfo as EpubLocationWithEdges).atEnd),
-            atStart: Boolean((locationInfo as EpubLocationWithEdges).atStart),
-          }
-
-          if (readerModeRef.current !== 'epub') {
-            handleReaderActivity()
-            return
-          }
-
-          const nextLocation = locationInfo.start.cfi
-          const nextProgress = Math.round((locationInfo.percentage ?? 0) * 100)
-
-          setLocation(nextLocation)
-          setProgress(nextProgress)
-
-          patchBook(currentBookId, {
-            currentLocation: nextLocation,
-            lastOpenedAt: Date.now(),
-            progressPercentage: nextProgress,
-          })
-          handleReaderActivity()
-        }
-
-        renderedHandler = (_section, contents) => {
-          currentRenderTokenRef.current += 1
-          pruneReaderDocuments()
-          registerReaderDocument(contents.document)
-
-          void refreshVisibleImages()
-          restartIdleAutoEnhanceTimer()
-        }
-
-        rendition.on('relocated', relocationHandler)
-        rendition.on('rendered', renderedHandler)
-        await rendition.display(
-          imageSpreadReaderEnabled ? undefined : getEpubInitialLocation(initialLocation),
-        )
       } catch (readerError) {
         if (isActiveReader()) {
+          setReaderNavigationReady(false)
           setError(
             readerError instanceof Error
               ? readerError.message
@@ -2616,7 +2680,7 @@ export function ReaderPage() {
         }
       } finally {
         if (mountedRef.current && isActiveReader()) {
-          setLoading(false)
+          setReaderInitializing(false)
         }
       }
     }
@@ -2630,6 +2694,7 @@ export function ReaderPage() {
       activeBookIdRef.current = undefined
       currentReaderSessionIdRef.current = null
       currentEnhancementGroupIdRef.current = null
+      setReaderNavigationReady(false)
       setZoomedImage(null)
       setIsEnhancing(false)
       if (idleTimerRef.current !== undefined) {
@@ -2660,6 +2725,7 @@ export function ReaderPage() {
       renditionRef.current = null
       bookRef.current = null
       setReaderReady(false)
+      setReaderInitializing(false)
       resetBookEnhancementState()
     }
     // Reader setup is expensive; progress saves and activity callbacks must not restart it.
@@ -2862,7 +2928,8 @@ export function ReaderPage() {
     })
   }, [])
 
-  const toolbarDisabled = !readerReady || loading
+  const readerBlockingLoading = readerInitializing && !readerInteractionReady
+  const toolbarDisabled = !readerInteractionReady
   const readerShellClassName = `reader-focus-shell${
     isReaderUiActive || isTocOpen ? ' is-reader-ui-active' : ''
   }`
@@ -2926,10 +2993,10 @@ export function ReaderPage() {
           onClick={handleReaderStageClick}
           onWheel={handleReaderStageWheel}
         >
-          {loading ? (
+          {readerBlockingLoading ? (
             <div className="reader-loading">
               <LoaderCircle size={34} className="animate-spin" />
-              <span>EPUB を読み込んでいます</span>
+              <span>読書画面を準備しています</span>
             </div>
           ) : null}
           {readerMode === 'image-spread' ? (
@@ -3066,9 +3133,15 @@ export function ReaderPage() {
                       onClick={() => {
                         handleReaderActivity()
                         setIsTocOpen(false)
+                        const rendition = renditionRef.current
+                        if (!rendition) {
+                          setError('目次ジャンプの準備がまだ完了していません。')
+                          return
+                        }
+
                         setReaderMode('epub')
                         readerModeRef.current = 'epub'
-                        void renditionRef.current?.display(item.href)
+                        void rendition.display(item.href)
                       }}
                     >
                       {item.label}
