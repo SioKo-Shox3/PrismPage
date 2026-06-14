@@ -192,6 +192,21 @@ pub struct ScanBookImagesResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReadBookAssetImageRequest {
+    pub book_id: String,
+    pub asset_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadBookAssetImageResponse {
+    pub asset_path: String,
+    pub mime_type: String,
+    pub image_data_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnhanceBookAssetImageRequest {
     pub book_id: String,
     pub engine_id: EngineId,

@@ -30,7 +30,7 @@ declare module 'epubjs' {
   }
 
   export interface EpubRendition {
-    display(target?: string): Promise<void>
+    display(target?: string | number): Promise<void>
     next(): Promise<void>
     prev(): Promise<void>
     themes: {

@@ -119,6 +119,17 @@ export interface ScanBookImagesResponse {
   images: ScannedBookImage[]
 }
 
+export interface ReadBookAssetImageRequest {
+  bookId: string
+  assetPath: string
+}
+
+export interface ReadBookAssetImageResponse {
+  assetPath: string
+  mimeType: string
+  imageDataUrl: string
+}
+
 export interface EnhanceBookAssetImageRequest {
   bookId: string
   engineId: EngineId

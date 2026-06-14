@@ -31,6 +31,7 @@ import {
   enhanceBookAssetImage,
   enhanceBookImage,
   getEngineStatuses,
+  readBookAssetImage,
   readBookBase64,
   readEnhancedBookImage,
   scanBookImages,
@@ -50,6 +51,7 @@ const XLINK_NS = 'http://www.w3.org/1999/xlink'
 type ReaderImageElement = HTMLImageElement | SVGImageElement
 type ReaderNavigationDirection = 'next' | 'prev'
 type ReaderPageDirection = 'ltr' | 'rtl'
+type ReaderMode = 'epub' | 'image-spread'
 type ReaderSpreadMode = 'always' | 'none'
 
 interface ZoomedImageState {
@@ -89,9 +91,23 @@ interface BookEnhancementQueueItem {
   priority: 'visible' | 'precompute'
 }
 
+interface ImageSpreadPage {
+  displayDataUrl?: string
+  enhancedDataUrl?: string
+  error?: string
+  image: ScannedBookImage
+  loading: boolean
+  originalDataUrl?: string
+}
+
 interface ReaderMetadataWithDirection {
   direction?: unknown
   pageProgressionDirection?: unknown
+}
+
+interface EpubLocationWithEdges extends EpubLocation {
+  atEnd?: boolean
+  atStart?: boolean
 }
 
 interface ReaderLayoutRendition extends EpubRendition {
@@ -287,6 +303,61 @@ function getReaderSpreadMode(element: HTMLElement): ReaderSpreadMode {
   const { height, width } = getReaderViewportSize(element)
 
   return shouldUseReaderSpread(width, height) ? 'always' : 'none'
+}
+
+function getImageSpreadPageCount(element: HTMLElement | null) {
+  if (!element) {
+    return 1
+  }
+
+  const { height, width } = getReaderViewportSize(element)
+
+  return shouldUseReaderSpread(width, height) ? 2 : 1
+}
+
+function parseImageSpreadLocation(location?: string) {
+  const match = location?.match(/^image-spread:(\d+)$/)
+
+  if (!match) {
+    return null
+  }
+
+  const index = Number.parseInt(match[1], 10)
+
+  return Number.isFinite(index) && index >= 0 ? index : null
+}
+
+function getEpubInitialLocation(location?: string) {
+  return parseImageSpreadLocation(location) === null ? location : undefined
+}
+
+function getImageSpreadLocation(index: number) {
+  return `image-spread:${Math.max(0, index)}`
+}
+
+function getEpubSpineItemCount(epubBook: ReturnType<typeof ePub>) {
+  const spineItems = (epubBook as unknown as {
+    spine?: {
+      spineItems?: unknown[]
+      items?: unknown[]
+    }
+  }).spine
+
+  return spineItems?.spineItems?.length ?? spineItems?.items?.length ?? 0
+}
+
+function shouldUseImageSpreadReader(images: ScannedBookImage[], epubBook: ReturnType<typeof ePub>) {
+  if (images.length < 2) {
+    return false
+  }
+
+  const spineItemCount = getEpubSpineItemCount(epubBook)
+
+  if (spineItemCount <= 1) {
+    return images.length >= 2
+  }
+
+  return images.length >= Math.max(4, Math.ceil(spineItemCount * 0.9))
 }
 
 function resizeReaderRenditionIfReady(
@@ -538,6 +609,12 @@ export function ReaderPage() {
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [readerReady, setReaderReady] = useState(false)
   const [isReaderUiActive, setIsReaderUiActive] = useState(false)
+  const [readerMode, setReaderMode] = useState<ReaderMode>('epub')
+  const [readerDirection, setReaderDirection] = useState<ReaderPageDirection>('rtl')
+  const [imageSpreadManifest, setImageSpreadManifest] = useState<ScannedBookImage[]>([])
+  const [imageSpreadIndex, setImageSpreadIndex] = useState(0)
+  const [imageSpreadPageCount, setImageSpreadPageCount] = useState(1)
+  const [imageSpreadPages, setImageSpreadPages] = useState<ImageSpreadPage[]>([])
   const [idleGenerationSnapshot, setIdleGenerationSnapshot] = useState(0)
   const [autoEnhanceStatus, setAutoEnhanceStatus] = useState<AutoEnhanceStatus>({
     message: '元画像を表示しています。',
@@ -559,6 +636,12 @@ export function ReaderPage() {
   const lastReaderWheelAtRef = useRef(0)
   const pendingImageClickNavigationRef = useRef<number | undefined>(undefined)
   const readerDirectionRef = useRef<ReaderPageDirection>('rtl')
+  const readerModeRef = useRef<ReaderMode>('epub')
+  const imageSpreadManifestRef = useRef<ScannedBookImage[]>([])
+  const imageSpreadIndexRef = useRef(0)
+  const imageSpreadPageCountRef = useRef(1)
+  const imageSpreadLoadTokenRef = useRef(0)
+  const readerRelocationEdgesRef = useRef({ atEnd: false, atStart: true })
   const bookImageManifestRef = useRef<ScannedBookImage[]>([])
   const bookImageByHashRef = useRef(new Map<string, ScannedBookImage>())
   const bookImageCachedHashesRef = useRef(new Set<string>())
@@ -579,6 +662,22 @@ export function ReaderPage() {
     () => engineStatuses.find((status) => status.id === preferredEngine),
     [engineStatuses, preferredEngine],
   )
+
+  useEffect(() => {
+    readerModeRef.current = readerMode
+  }, [readerMode])
+
+  useEffect(() => {
+    imageSpreadManifestRef.current = imageSpreadManifest
+  }, [imageSpreadManifest])
+
+  useEffect(() => {
+    imageSpreadIndexRef.current = imageSpreadIndex
+  }, [imageSpreadIndex])
+
+  useEffect(() => {
+    imageSpreadPageCountRef.current = imageSpreadPageCount
+  }, [imageSpreadPageCount])
 
   const autoEnhanceSettingsRef = useRef<AutoEnhanceSettings>({
     autoEnhanceZoomedImage,
@@ -827,6 +926,61 @@ export function ReaderPage() {
     [rememberEnhancedImageDataUrl],
   )
 
+  const applyCachedEnhancedImageToImageSpreadHash = useCallback(
+    async (
+      targetBookId: string,
+      engineId: EngineId,
+      scale: number,
+      imageHash: string,
+    ) => {
+      const settings = autoEnhanceSettingsRef.current
+
+      if (readerModeRef.current !== 'image-spread' || !settings.autoEnhanceVisibleImages) {
+        return false
+      }
+
+      const sessionId = readerSessionRef.current
+      const readerSessionId = currentReaderSessionIdRef.current
+
+      if (!readerSessionId || !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId)) {
+        return false
+      }
+
+      const dataUrl = await readEnhancedImageForDisplay(targetBookId, engineId, scale, imageHash)
+
+      if (
+        !dataUrl ||
+        !isCurrentReaderSessionKey(sessionId, targetBookId, readerSessionId)
+      ) {
+        return false
+      }
+
+      let applied = false
+      setImageSpreadPages((current) =>
+        current.map((page) => {
+          if (page.image.imageHash !== imageHash || page.enhancedDataUrl === dataUrl) {
+            return page
+          }
+
+          applied = true
+          return {
+            ...page,
+            displayDataUrl: dataUrl,
+            enhancedDataUrl: dataUrl,
+          }
+        }),
+      )
+      setZoomedImage((current) =>
+        current?.bookId === targetBookId && current.imageHash === imageHash
+          ? { ...current, enhancedDataUrl: dataUrl }
+          : current,
+      )
+
+      return applied
+    },
+    [isCurrentReaderSessionKey, readEnhancedImageForDisplay],
+  )
+
   const applyCachedEnhancedImageToVisibleHash = useCallback(
     async (
       targetBookId: string,
@@ -843,11 +997,24 @@ export function ReaderPage() {
 
       if (
         !readerSessionId ||
-        documents.length === 0 ||
-        !settings.autoEnhanceVisibleImages ||
         currentEnhancementGroupIdRef.current !== runId
       ) {
         return false
+      }
+
+      if (!settings.autoEnhanceVisibleImages) {
+        return false
+      }
+
+      const spreadApplied = await applyCachedEnhancedImageToImageSpreadHash(
+        targetBookId,
+        engineId,
+        scale,
+        imageHash,
+      )
+
+      if (documents.length === 0) {
+        return spreadApplied
       }
 
       const matches: Array<{ image: ReaderImageElement; originalInfo: OriginalImageInfo }> = []
@@ -871,7 +1038,7 @@ export function ReaderPage() {
       }
 
       if (matches.length === 0) {
-        return false
+        return spreadApplied
       }
 
       const dataUrl = await readEnhancedImageForDisplay(targetBookId, engineId, scale, imageHash)
@@ -911,9 +1078,10 @@ export function ReaderPage() {
         )
       }
 
-      return applied
+      return applied || spreadApplied
     },
     [
+      applyCachedEnhancedImageToImageSpreadHash,
       getActiveReaderDocuments,
       isCurrentReaderSessionKey,
       prepareOriginalImageInfo,
@@ -1325,6 +1493,20 @@ export function ReaderPage() {
           images.filter((image) => image.cached).map((image) => image.imageHash),
         )
 
+        let queuedVisibleCount = 0
+        if (readerModeRef.current === 'image-spread' && settings.autoEnhanceVisibleImages) {
+          const visibleImages = images.slice(
+            imageSpreadIndexRef.current,
+            imageSpreadIndexRef.current + imageSpreadPageCountRef.current,
+          )
+
+          for (const image of visibleImages) {
+            if (enqueueBookImage(image, 'visible')) {
+              queuedVisibleCount += 1
+            }
+          }
+        }
+
         await refreshVisibleImages()
 
         if (!settings.precomputeBookImages) {
@@ -1332,6 +1514,9 @@ export function ReaderPage() {
             message: '元画像表示。開いたページだけ処理します。',
             tone: 'idle',
           })
+          if (queuedVisibleCount > 0) {
+            processBookImageQueueRef.current(runId)
+          }
           return
         }
 
@@ -1350,7 +1535,7 @@ export function ReaderPage() {
           tone: queuedCount > 0 ? 'working' : 'ready',
         })
 
-        if (queuedCount > 0) {
+        if (queuedVisibleCount > 0 || queuedCount > 0) {
           processBookImageQueueRef.current(runId)
         }
       } catch {
@@ -1424,8 +1609,54 @@ export function ReaderPage() {
     })
   }, [restartIdleAutoEnhanceTimer])
 
+  const updateImageSpreadLocation = useCallback(
+    (index: number, totalImages = imageSpreadManifestRef.current.length) => {
+      if (!currentBookId || totalImages <= 0) {
+        return
+      }
+
+      const nextLocation = getImageSpreadLocation(index)
+      const visibleEnd = Math.min(index + imageSpreadPageCountRef.current, totalImages)
+      const nextProgress = Math.round((visibleEnd / totalImages) * 100)
+
+      setLocation(nextLocation)
+      setProgress(nextProgress)
+      patchBook(currentBookId, {
+        currentLocation: nextLocation,
+        lastOpenedAt: Date.now(),
+        progressPercentage: nextProgress,
+      })
+    },
+    [currentBookId, patchBook],
+  )
+
   const navigateReaderPage = useCallback(
     (direction: ReaderNavigationDirection) => {
+      if (readerModeRef.current === 'image-spread') {
+        const totalImages = imageSpreadManifestRef.current.length
+
+        if (totalImages <= 0) {
+          return false
+        }
+
+        handleReaderActivity()
+        setImageSpreadIndex((current) => {
+          const step = Math.max(1, imageSpreadPageCountRef.current)
+          const nextIndex =
+            direction === 'next'
+              ? current + step < totalImages
+                ? current + step
+                : 0
+              : Math.max(0, current - step)
+
+          updateImageSpreadLocation(nextIndex, totalImages)
+
+          return nextIndex
+        })
+
+        return true
+      }
+
       const rendition = renditionRef.current
 
       if (!rendition) {
@@ -1433,11 +1664,15 @@ export function ReaderPage() {
       }
 
       handleReaderActivity()
-      void (direction === 'next' ? rendition.next() : rendition.prev())
+      if (direction === 'next' && readerRelocationEdgesRef.current.atEnd) {
+        void rendition.display(0)
+      } else {
+        void (direction === 'next' ? rendition.next() : rendition.prev())
+      }
 
       return true
     },
-    [handleReaderActivity],
+    [handleReaderActivity, updateImageSpreadLocation],
   )
 
   const navigateReaderPageFromPoint = useCallback(
@@ -1495,6 +1730,8 @@ export function ReaderPage() {
         event.ctrlKey ||
         event.metaKey ||
         event.shiftKey ||
+        isReaderUiActive ||
+        isTocOpen ||
         isReaderInteractiveTarget(event.target)
       ) {
         return
@@ -1518,6 +1755,8 @@ export function ReaderPage() {
     [
       clearPendingImageClickNavigation,
       handleReaderActivity,
+      isReaderUiActive,
+      isTocOpen,
       navigateReaderPageFromPoint,
       scheduleImageClickNavigation,
     ],
@@ -1555,19 +1794,31 @@ export function ReaderPage() {
     [revealReaderUiTemporarily],
   )
 
+  const handleReaderDocumentMouseMove = useCallback(
+    (event: MouseEvent) => {
+      const readerPoint = getReaderRelativePointFromDocumentEvent(event, containerRef.current)
+
+      clearReaderUiRevealTimer()
+      setIsReaderUiActive(isReaderPointNearEdge(readerPoint))
+    },
+    [clearReaderUiRevealTimer],
+  )
+
   const handleReaderDocumentPointerMove = useCallback(
     (event: PointerEvent) => {
-      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+      const readerPoint = getReaderRelativePointFromDocumentEvent(event, containerRef.current)
+
+      if (event.pointerType === 'mouse') {
+        clearReaderUiRevealTimer()
+        setIsReaderUiActive(isReaderPointNearEdge(readerPoint))
         return
       }
-
-      const readerPoint = getReaderRelativePointFromDocumentEvent(event, containerRef.current)
 
       if (isReaderPointNearEdge(readerPoint)) {
         revealReaderUiTemporarily(1400)
       }
     },
-    [revealReaderUiTemporarily],
+    [clearReaderUiRevealTimer, revealReaderUiTemporarily],
   )
 
   const handleReaderStageClick = useCallback(
@@ -1580,6 +1831,8 @@ export function ReaderPage() {
         event.ctrlKey ||
         event.metaKey ||
         event.shiftKey ||
+        isReaderUiActive ||
+        isTocOpen ||
         isReaderInteractiveTarget(event.target)
       ) {
         return
@@ -1592,9 +1845,22 @@ export function ReaderPage() {
 
       clearPendingImageClickNavigation()
       const rect = event.currentTarget.getBoundingClientRect()
-      navigateReaderPageFromPoint(event.clientX - rect.left, rect.width)
+      const readerX = event.clientX - rect.left
+
+      if (getReaderImageFromTarget(event.target)) {
+        scheduleImageClickNavigation(readerX, rect.width)
+        return
+      }
+
+      navigateReaderPageFromPoint(readerX, rect.width)
     },
-    [clearPendingImageClickNavigation, navigateReaderPageFromPoint],
+    [
+      clearPendingImageClickNavigation,
+      isReaderUiActive,
+      isTocOpen,
+      navigateReaderPageFromPoint,
+      scheduleImageClickNavigation,
+    ],
   )
 
   const handleReaderStageWheel = useCallback(
@@ -1612,6 +1878,53 @@ export function ReaderPage() {
       }
     },
     [navigateReaderPageByWheel],
+  )
+
+  const handleReaderEdgeZoneClick = useCallback(
+    (event: ReactMouseEvent<HTMLSpanElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.detail > 1 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isTocOpen
+      ) {
+        return
+      }
+
+      const shell = event.currentTarget.closest('.reader-focus-shell')
+      if (!(shell instanceof HTMLElement)) {
+        return
+      }
+
+      const rect = shell.getBoundingClientRect()
+      event.preventDefault()
+      event.stopPropagation()
+      clearPendingImageClickNavigation()
+      navigateReaderPageFromPoint(event.clientX - rect.left, rect.width)
+    },
+    [clearPendingImageClickNavigation, isTocOpen, navigateReaderPageFromPoint],
+  )
+
+  const handleReaderEdgeZoneWheel = useCallback(
+    (event: ReactWheelEvent<HTMLSpanElement>) => {
+      if (
+        event.defaultPrevented ||
+        isTocOpen ||
+        Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+      ) {
+        return
+      }
+
+      if (navigateReaderPageByWheel(event.deltaY)) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    },
+    [isTocOpen, navigateReaderPageByWheel],
   )
 
   const isReaderPointerNearEdge = useCallback((event: {
@@ -1657,6 +1970,7 @@ export function ReaderPage() {
 
       document.addEventListener('click', handleReaderDocumentClick, listenerOptions)
       document.addEventListener('keydown', handleReaderActivity, listenerOptions)
+      document.addEventListener('mousemove', handleReaderDocumentMouseMove, listenerOptions)
       document.addEventListener('pointerdown', handleReaderDocumentPointerDown, listenerOptions)
       document.addEventListener('pointermove', handleReaderDocumentPointerMove, listenerOptions)
       document.addEventListener('wheel', handleReaderDocumentWheel, wheelListenerOptions)
@@ -1665,6 +1979,7 @@ export function ReaderPage() {
       return () => {
         document.removeEventListener('click', handleReaderDocumentClick, listenerOptions)
         document.removeEventListener('keydown', handleReaderActivity, listenerOptions)
+        document.removeEventListener('mousemove', handleReaderDocumentMouseMove, listenerOptions)
         document.removeEventListener('pointerdown', handleReaderDocumentPointerDown, listenerOptions)
         document.removeEventListener('pointermove', handleReaderDocumentPointerMove, listenerOptions)
         document.removeEventListener('wheel', handleReaderDocumentWheel, wheelListenerOptions)
@@ -1674,6 +1989,7 @@ export function ReaderPage() {
     [
       handleReaderActivity,
       handleReaderDocumentClick,
+      handleReaderDocumentMouseMove,
       handleReaderDocumentPointerDown,
       handleReaderDocumentPointerMove,
       handleReaderDocumentWheel,
@@ -1860,6 +2176,162 @@ export function ReaderPage() {
   ])
 
   useEffect(() => {
+    if (!currentBookId || !readerReady || readerMode !== 'image-spread') {
+      return
+    }
+
+    const visibleImages = imageSpreadManifest.slice(
+      imageSpreadIndex,
+      imageSpreadIndex + imageSpreadPageCount,
+    )
+
+    if (visibleImages.length === 0) {
+      readerModeRef.current = 'epub'
+      window.setTimeout(() => {
+        if (readerModeRef.current === 'epub') {
+          setReaderMode('epub')
+        }
+      }, 0)
+      return
+    }
+
+    const sessionId = readerSessionRef.current
+    const readerSessionId = currentReaderSessionIdRef.current
+    const loadToken = ++imageSpreadLoadTokenRef.current
+    const settings = autoEnhanceSettingsRef.current
+    const runId = currentEnhancementGroupIdRef.current
+
+    currentRenderTokenRef.current += 1
+    updateImageSpreadLocation(imageSpreadIndex, imageSpreadManifest.length)
+    window.queueMicrotask(() => {
+      if (loadToken !== imageSpreadLoadTokenRef.current) {
+        return
+      }
+
+      setImageSpreadPages((current) =>
+        visibleImages.map((image) => {
+          const existingPage = current.find((page) => page.image.assetPath === image.assetPath)
+
+          return existingPage
+            ? {
+                ...existingPage,
+                loading: !existingPage.displayDataUrl,
+              }
+            : {
+                image,
+                loading: true,
+              }
+        }),
+      )
+    })
+
+    for (const image of visibleImages) {
+      void (async () => {
+        const isCurrentImageSpreadLoad = () =>
+          loadToken === imageSpreadLoadTokenRef.current &&
+          isCurrentReaderSessionKey(sessionId, currentBookId, readerSessionId ?? '')
+
+        const enhancedDataUrlPromise =
+          settings.enhancementEnabled && settings.autoEnhanceVisibleImages
+            ? readEnhancedImageForDisplay(
+                currentBookId,
+                settings.preferredEngine,
+                settings.zoomEnhancementScale,
+                image.imageHash,
+              ).catch(() => null)
+            : Promise.resolve<string | null>(null)
+
+        const originalImagePromise = readBookAssetImage({
+            bookId: currentBookId,
+            assetPath: image.assetPath,
+        })
+
+        const applyEnhancedDataUrl = async () => {
+          const enhancedDataUrl = await enhancedDataUrlPromise
+
+          if (!enhancedDataUrl || !isCurrentImageSpreadLoad()) {
+            return false
+          }
+
+          setImageSpreadPages((current) =>
+            current.map((page) =>
+              page.image.assetPath === image.assetPath
+                ? {
+                    ...page,
+                    displayDataUrl: enhancedDataUrl,
+                    enhancedDataUrl,
+                    loading: false,
+                  }
+                : page,
+            ),
+          )
+
+          return true
+        }
+
+        const applyOriginalDataUrl = async () => {
+          const original = await originalImagePromise
+
+          if (!isCurrentImageSpreadLoad()) {
+            return false
+          }
+
+          setImageSpreadPages((current) =>
+            current.map((page) =>
+              page.image.assetPath === image.assetPath
+                ? {
+                    ...page,
+                    displayDataUrl: page.enhancedDataUrl ?? page.displayDataUrl ?? original.imageDataUrl,
+                    loading: false,
+                    originalDataUrl: original.imageDataUrl,
+                  }
+                : page,
+            ),
+          )
+
+          return true
+        }
+
+        const [hasEnhancedDataUrl, hasOriginalDataUrl] = await Promise.all([
+          applyEnhancedDataUrl(),
+          applyOriginalDataUrl().catch(() => false),
+        ])
+
+        if (!isCurrentImageSpreadLoad()) {
+          return
+        }
+
+        if (!hasEnhancedDataUrl && !hasOriginalDataUrl) {
+            setReaderMode('epub')
+            readerModeRef.current = 'epub'
+          return
+        }
+
+        if (
+          !hasEnhancedDataUrl &&
+          runId &&
+          settings.enhancementEnabled &&
+          (settings.autoEnhanceVisibleImages || settings.precomputeBookImages) &&
+          enqueueBookImage(image, 'visible')
+        ) {
+          processBookImageQueueRef.current(runId)
+        }
+      })()
+    }
+  }, [
+    currentBookId,
+    enqueueBookImage,
+    imageSpreadIndex,
+    imageSpreadManifest,
+    imageSpreadPageCount,
+    isCurrentReaderSessionKey,
+    readEnhancedImageForDisplay,
+    readerMode,
+    readerReady,
+    updateImageSpreadLocation,
+  ])
+
+  useEffect(() => {
     void getEngineStatuses()
       .then(setEngineStatuses)
       .catch((statusError) =>
@@ -1908,6 +2380,17 @@ export function ReaderPage() {
     const isActiveReader = () => isCurrentReaderSession(sessionId, currentBookId)
     setZoomedImage(null)
     setIsEnhancing(false)
+    setReaderMode('epub')
+    readerModeRef.current = 'epub'
+    setReaderDirection('rtl')
+    readerDirectionRef.current = 'rtl'
+    setImageSpreadManifest([])
+    imageSpreadManifestRef.current = []
+    setImageSpreadPages([])
+    setImageSpreadIndex(0)
+    setImageSpreadPageCount(getImageSpreadPageCount(containerRef.current))
+    imageSpreadLoadTokenRef.current += 1
+    readerRelocationEdgesRef.current = { atEnd: false, atStart: true }
     cleanupReaderDocuments()
     currentRenderTokenRef.current += 1
     originalImageInfoRef.current = new WeakMap<ReaderImageElement, OriginalImageInfo>()
@@ -1945,6 +2428,7 @@ export function ReaderPage() {
 
         const readingDirection = getReaderDirection(metadata)
         readerDirectionRef.current = readingDirection
+        setReaderDirection(readingDirection)
 
         const navigation = await epubBook.loaded.navigation
         if (!isActiveReader()) {
@@ -1953,6 +2437,54 @@ export function ReaderPage() {
         }
 
         setToc(flattenNavigation(navigation.toc as EpubNavigationItem[]))
+
+        let imageSpreadReaderEnabled = false
+        try {
+          const imageManifestResponse = await scanBookImages({
+            bookId: currentBookId,
+            engineId: preferredEngine,
+            scale: zoomEnhancementScale,
+          })
+
+          if (!isActiveReader()) {
+            epubBook.destroy()
+            return
+          }
+
+          const images = [...imageManifestResponse.images].sort((left, right) => {
+            if (left.spineIndex !== right.spineIndex) {
+              return left.spineIndex - right.spineIndex
+            }
+
+            return left.order - right.order
+          })
+
+          if (shouldUseImageSpreadReader(images, epubBook)) {
+            const initialImageIndex = Math.min(
+              parseImageSpreadLocation(initialLocationRef.current) ?? 0,
+              Math.max(images.length - 1, 0),
+            )
+
+            imageSpreadReaderEnabled = true
+            readerModeRef.current = 'image-spread'
+            setReaderMode('image-spread')
+            setImageSpreadManifest(images)
+            imageSpreadManifestRef.current = images
+            setImageSpreadIndex(initialImageIndex)
+            setImageSpreadPageCount(getImageSpreadPageCount(containerRef.current))
+            bookImageManifestRef.current = images
+            bookImageByHashRef.current = new Map(images.map((image) => [image.imageHash, image]))
+            bookImageCachedHashesRef.current = new Set(
+              images.filter((image) => image.cached).map((image) => image.imageHash),
+            )
+            updateImageSpreadLocation(initialImageIndex, images.length)
+          }
+        } catch {
+          if (isActiveReader()) {
+            setReaderMode('epub')
+            readerModeRef.current = 'epub'
+          }
+        }
 
         const rendition = epubBook.renderTo(containerRef.current!, {
           defaultDirection: readingDirection,
@@ -1984,6 +2516,7 @@ export function ReaderPage() {
           }
 
           rendition.spread(getReaderSpreadMode(element), READER_SPREAD_MIN_WIDTH)
+          setImageSpreadPageCount(getImageSpreadPageCount(element))
           resizeReaderRenditionIfReady(rendition, width, height)
 
           for (const document of getActiveReaderDocuments()) {
@@ -2015,6 +2548,16 @@ export function ReaderPage() {
 
         relocationHandler = (locationInfo) => {
           pruneReaderDocuments()
+          readerRelocationEdgesRef.current = {
+            atEnd: Boolean((locationInfo as EpubLocationWithEdges).atEnd),
+            atStart: Boolean((locationInfo as EpubLocationWithEdges).atStart),
+          }
+
+          if (readerModeRef.current !== 'epub') {
+            handleReaderActivity()
+            return
+          }
+
           const nextLocation = locationInfo.start.cfi
           const nextProgress = Math.round((locationInfo.percentage ?? 0) * 100)
 
@@ -2040,7 +2583,9 @@ export function ReaderPage() {
 
         rendition.on('relocated', relocationHandler)
         rendition.on('rendered', renderedHandler)
-        await rendition.display(initialLocationRef.current)
+        await rendition.display(
+          imageSpreadReaderEnabled ? undefined : getEpubInitialLocation(initialLocationRef.current),
+        )
       } catch (readerError) {
         if (isActiveReader()) {
           setError(
@@ -2110,10 +2655,13 @@ export function ReaderPage() {
     isCurrentReaderSession,
     patchBook,
     pruneReaderDocuments,
+    preferredEngine,
     registerReaderDocument,
     refreshVisibleImages,
     resetBookEnhancementState,
     restartIdleAutoEnhanceTimer,
+    updateImageSpreadLocation,
+    zoomEnhancementScale,
   ])
 
   useEffect(() => {
@@ -2288,6 +2836,25 @@ export function ReaderPage() {
     zoomedImage,
   ])
 
+  const openImageSpreadPage = useCallback((page: ImageSpreadPage) => {
+    const targetBookId = activeBookIdRef.current
+    const readerSessionId = currentReaderSessionIdRef.current
+
+    if (!targetBookId || !readerSessionId || !page.originalDataUrl) {
+      return
+    }
+
+    setZoomedImage({
+      bookId: targetBookId,
+      caption: page.image.assetPath,
+      enhancedDataUrl: page.enhancedDataUrl,
+      imageHash: page.image.imageHash,
+      originalDataUrl: page.originalDataUrl,
+      readerSessionId,
+      sessionId: readerSessionRef.current,
+    })
+  }, [])
+
   const toolbarDisabled = !readerReady || loading
   const readerShellClassName = `reader-focus-shell${
     isReaderUiActive || isTocOpen ? ' is-reader-ui-active' : ''
@@ -2346,7 +2913,9 @@ export function ReaderPage() {
         {error ? <div className="reader-floating-message is-error">{error}</div> : null}
 
         <div
-          className="reader-stage reader-stage--focus"
+          className={`reader-stage reader-stage--focus${
+            readerMode === 'image-spread' ? ' is-image-spread-mode' : ''
+          }`}
           onClick={handleReaderStageClick}
           onWheel={handleReaderStageWheel}
         >
@@ -2356,7 +2925,54 @@ export function ReaderPage() {
               <span>EPUB を読み込んでいます</span>
             </div>
           ) : null}
-          <div ref={containerRef} className="epub-container" />
+          {readerMode === 'image-spread' ? (
+            <div className="image-spread-reader" aria-label="画像見開きビュー">
+              <div className="image-spread-pages" data-direction={readerDirection}>
+                {imageSpreadPages.map((page) => (
+                  <figure className="image-spread-page" key={page.image.assetPath}>
+                    {page.displayDataUrl ? (
+                      <img
+                        src={page.displayDataUrl}
+                        alt={page.image.assetPath}
+                        draggable={false}
+                        onDoubleClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          clearPendingImageClickNavigation()
+                          handleReaderActivity()
+                          openImageSpreadPage(page)
+                        }}
+                      />
+                    ) : (
+                      <div className="image-spread-placeholder">
+                        <LoaderCircle size={28} className="animate-spin" />
+                      </div>
+                    )}
+                  </figure>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <div
+            ref={containerRef}
+            className={`epub-container${readerMode === 'image-spread' ? ' is-reader-fallback' : ''}`}
+          />
+        </div>
+
+        <div className="reader-edge-hover-zones" aria-hidden="true">
+          {['top', 'right', 'bottom', 'left'].map((edge) => (
+            <span
+              key={edge}
+              className={`reader-edge-hover-zone is-${edge}`}
+              onMouseEnter={() => {
+                clearReaderUiRevealTimer()
+                setIsReaderUiActive(true)
+              }}
+              onClick={handleReaderEdgeZoneClick}
+              onPointerDown={() => revealReaderUiTemporarily(1400)}
+              onWheel={handleReaderEdgeZoneWheel}
+            />
+          ))}
         </div>
 
         <div className="reader-bottom-bar">
@@ -2365,7 +2981,7 @@ export function ReaderPage() {
             className="reader-icon-button"
             onClick={() => {
               handleReaderActivity()
-              void renditionRef.current?.prev()
+              navigateReaderPage('prev')
             }}
             disabled={toolbarDisabled}
             aria-label="前へ"
@@ -2386,7 +3002,7 @@ export function ReaderPage() {
             className="reader-icon-button"
             onClick={() => {
               handleReaderActivity()
-              void renditionRef.current?.next()
+              navigateReaderPage('next')
             }}
             disabled={toolbarDisabled}
             aria-label="次へ"
@@ -2431,6 +3047,8 @@ export function ReaderPage() {
                       onClick={() => {
                         handleReaderActivity()
                         setIsTocOpen(false)
+                        setReaderMode('epub')
+                        readerModeRef.current = 'epub'
                         void renditionRef.current?.display(item.href)
                       }}
                     >

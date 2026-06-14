@@ -121,6 +121,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::library::import_epub_from_path,
             commands::library::read_book_base64,
+            commands::library::read_book_asset_image,
             commands::library::take_pending_opened_epubs,
             commands::engines::get_engine_statuses,
             commands::engines::detect_engine_candidates,

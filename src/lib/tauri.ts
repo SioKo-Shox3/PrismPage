@@ -13,6 +13,8 @@ import type {
   EngineInstallOptionsResponse,
   EngineStatus,
   ImportedBook,
+  ReadBookAssetImageRequest,
+  ReadBookAssetImageResponse,
   ReadEnhancedBookImageRequest,
   ScanBookImagesRequest,
   ScanBookImagesResponse,
@@ -27,6 +29,10 @@ export async function importEpubFromPath(path: string) {
 
 export async function readBookBase64(id: string) {
   return invoke<string>('read_book_base64', { id })
+}
+
+export async function readBookAssetImage(request: ReadBookAssetImageRequest) {
+  return invoke<ReadBookAssetImageResponse>('read_book_asset_image', { request })
 }
 
 export async function getEngineStatuses() {
