@@ -620,7 +620,6 @@ export function ReaderPage() {
     message: '元画像を表示しています。',
     tone: 'idle',
   })
-  const initialLocationRef = useRef<string | undefined>(book?.currentLocation)
   const activeBookIdRef = useRef<string | undefined>(undefined)
   const readerInstanceIdRef = useRef(createClientId('reader'))
   const readerSessionRef = useRef(0)
@@ -2369,6 +2368,9 @@ export function ReaderPage() {
     let resizeFrameId: number | undefined
     let resizeObserver: ResizeObserver | null = null
     let resizeFallbackHandler: (() => void) | null = null
+    const initialLocation = useLibraryStore
+      .getState()
+      .books.find((entry) => entry.id === currentBookId)?.currentLocation
 
     mountedRef.current = true
     readerSessionRef.current += 1
@@ -2461,7 +2463,7 @@ export function ReaderPage() {
 
           if (shouldUseImageSpreadReader(images, epubBook)) {
             const initialImageIndex = Math.min(
-              parseImageSpreadLocation(initialLocationRef.current) ?? 0,
+              parseImageSpreadLocation(initialLocation) ?? 0,
               Math.max(images.length - 1, 0),
             )
 
@@ -2584,7 +2586,7 @@ export function ReaderPage() {
         rendition.on('relocated', relocationHandler)
         rendition.on('rendered', renderedHandler)
         await rendition.display(
-          imageSpreadReaderEnabled ? undefined : getEpubInitialLocation(initialLocationRef.current),
+          imageSpreadReaderEnabled ? undefined : getEpubInitialLocation(initialLocation),
         )
       } catch (readerError) {
         if (isActiveReader()) {
@@ -2642,27 +2644,9 @@ export function ReaderPage() {
       setReaderReady(false)
       resetBookEnhancementState()
     }
-  }, [
-    applyReaderTheme,
-    buildReaderSessionId,
-    cancelEnhancementsForGroup,
-    clearPendingImageClickNavigation,
-    clearReaderUiRevealTimer,
-    cleanupReaderDocuments,
-    currentBookId,
-    getActiveReaderDocuments,
-    handleReaderActivity,
-    isCurrentReaderSession,
-    patchBook,
-    pruneReaderDocuments,
-    preferredEngine,
-    registerReaderDocument,
-    refreshVisibleImages,
-    resetBookEnhancementState,
-    restartIdleAutoEnhanceTimer,
-    updateImageSpreadLocation,
-    zoomEnhancementScale,
-  ])
+    // Reader setup is expensive; progress saves and activity callbacks must not restart it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentBookId, preferredEngine, zoomEnhancementScale])
 
   useEffect(() => {
     applyReaderTheme()
