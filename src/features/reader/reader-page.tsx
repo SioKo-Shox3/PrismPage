@@ -91,15 +91,6 @@ interface BookEnhancementQueueItem {
   priority: 'visible' | 'precompute'
 }
 
-interface ImageSpreadPage {
-  displayDataUrl?: string
-  enhancedDataUrl?: string
-  error?: string
-  image: ScannedBookImage
-  loading: boolean
-  originalDataUrl?: string
-}
-
 interface ReaderMetadataWithDirection {
   direction?: unknown
   pageProgressionDirection?: unknown
@@ -614,7 +605,9 @@ export function ReaderPage() {
   const [imageSpreadManifest, setImageSpreadManifest] = useState<ScannedBookImage[]>([])
   const [imageSpreadIndex, setImageSpreadIndex] = useState(0)
   const [imageSpreadPageCount, setImageSpreadPageCount] = useState(1)
-  const [imageSpreadPages, setImageSpreadPages] = useState<ImageSpreadPage[]>([])
+  const [imageAssetDataUrls, setImageAssetDataUrls] = useState<Record<string, string>>({})
+  const [enhancedImageSpreadDataUrls, setEnhancedImageSpreadDataUrls] = useState<Record<string, string>>({})
+  const [imageSpreadLoadErrors, setImageSpreadLoadErrors] = useState<Record<string, string>>({})
   const [idleGenerationSnapshot, setIdleGenerationSnapshot] = useState(0)
   const [autoEnhanceStatus, setAutoEnhanceStatus] = useState<AutoEnhanceStatus>({
     message: '元画像を表示しています。',
@@ -639,7 +632,7 @@ export function ReaderPage() {
   const imageSpreadManifestRef = useRef<ScannedBookImage[]>([])
   const imageSpreadIndexRef = useRef(0)
   const imageSpreadPageCountRef = useRef(1)
-  const imageSpreadLoadTokenRef = useRef(0)
+  const imageSpreadEnhancedCacheChecksRef = useRef(new Set<string>())
   const readerRelocationEdgesRef = useRef({ atEnd: false, atStart: true })
   const bookImageManifestRef = useRef<ScannedBookImage[]>([])
   const bookImageByHashRef = useRef(new Map<string, ScannedBookImage>())
@@ -656,6 +649,11 @@ export function ReaderPage() {
   const enhancedImageCacheOrderRef = useRef<string[]>([])
   const zoomedImageRef = useRef<ZoomedImageState | null>(null)
   const currentBookId = book?.id
+
+  const visibleImageSpreadItems = useMemo(
+    () => imageSpreadManifest.slice(imageSpreadIndex, imageSpreadIndex + imageSpreadPageCount),
+    [imageSpreadIndex, imageSpreadManifest, imageSpreadPageCount],
+  )
 
   const currentEngineStatus = useMemo(
     () => engineStatuses.find((status) => status.id === preferredEngine),
@@ -954,28 +952,32 @@ export function ReaderPage() {
         return false
       }
 
-      let applied = false
-      setImageSpreadPages((current) =>
-        current.map((page) => {
-          if (page.image.imageHash !== imageHash || page.enhancedDataUrl === dataUrl) {
-            return page
-          }
+      setEnhancedImageSpreadDataUrls((current) => {
+        if (current[imageHash] === dataUrl) {
+          return current
+        }
 
-          applied = true
-          return {
-            ...page,
-            displayDataUrl: dataUrl,
-            enhancedDataUrl: dataUrl,
-          }
-        }),
-      )
+        return {
+          ...current,
+          [imageHash]: dataUrl,
+        }
+      })
+      setImageSpreadLoadErrors((current) => {
+        if (!current[imageHash]) {
+          return current
+        }
+
+        const next = { ...current }
+        delete next[imageHash]
+        return next
+      })
       setZoomedImage((current) =>
         current?.bookId === targetBookId && current.imageHash === imageHash
           ? { ...current, enhancedDataUrl: dataUrl }
           : current,
       )
 
-      return applied
+      return true
     },
     [isCurrentReaderSessionKey, readEnhancedImageForDisplay],
   )
@@ -1639,19 +1641,18 @@ export function ReaderPage() {
         }
 
         handleReaderActivity()
-        setImageSpreadIndex((current) => {
-          const step = Math.max(1, imageSpreadPageCountRef.current)
-          const nextIndex =
-            direction === 'next'
-              ? current + step < totalImages
-                ? current + step
-                : 0
-              : Math.max(0, current - step)
+        const currentIndex = imageSpreadIndexRef.current
+        const step = Math.max(1, imageSpreadPageCountRef.current)
+        const nextIndex =
+          direction === 'next'
+            ? currentIndex + step < totalImages
+              ? currentIndex + step
+              : 0
+            : Math.max(0, currentIndex - step)
 
-          updateImageSpreadLocation(nextIndex, totalImages)
-
-          return nextIndex
-        })
+        imageSpreadIndexRef.current = nextIndex
+        setImageSpreadIndex(nextIndex)
+        updateImageSpreadLocation(nextIndex, totalImages)
 
         return true
       }
@@ -2179,135 +2180,144 @@ export function ReaderPage() {
       return
     }
 
-    const visibleImages = imageSpreadManifest.slice(
-      imageSpreadIndex,
-      imageSpreadIndex + imageSpreadPageCount,
-    )
-
-    if (visibleImages.length === 0) {
-      readerModeRef.current = 'epub'
-      window.setTimeout(() => {
-        if (readerModeRef.current === 'epub') {
-          setReaderMode('epub')
-        }
-      }, 0)
+    if (visibleImageSpreadItems.length === 0) {
+      if (imageSpreadManifest.length > 0 && imageSpreadIndex !== 0) {
+        imageSpreadIndexRef.current = 0
+        window.queueMicrotask(() => {
+          if (readerModeRef.current === 'image-spread') {
+            setImageSpreadIndex(0)
+          }
+        })
+      }
       return
     }
 
     const sessionId = readerSessionRef.current
     const readerSessionId = currentReaderSessionIdRef.current
-    const loadToken = ++imageSpreadLoadTokenRef.current
     const settings = autoEnhanceSettingsRef.current
     const runId = currentEnhancementGroupIdRef.current
 
     currentRenderTokenRef.current += 1
     updateImageSpreadLocation(imageSpreadIndex, imageSpreadManifest.length)
-    window.queueMicrotask(() => {
-      if (loadToken !== imageSpreadLoadTokenRef.current) {
-        return
-      }
 
-      setImageSpreadPages((current) =>
-        visibleImages.map((image) => {
-          const existingPage = current.find((page) => page.image.assetPath === image.assetPath)
-
-          return existingPage
-            ? {
-                ...existingPage,
-                loading: !existingPage.displayDataUrl,
-              }
-            : {
-                image,
-                loading: true,
-              }
-        }),
-      )
-    })
-
-    for (const image of visibleImages) {
+    for (const image of visibleImageSpreadItems) {
       void (async () => {
         const isCurrentImageSpreadLoad = () =>
-          loadToken === imageSpreadLoadTokenRef.current &&
+          Boolean(readerSessionId) &&
           isCurrentReaderSessionKey(sessionId, currentBookId, readerSessionId ?? '')
 
-        const enhancedDataUrlPromise =
-          settings.enhancementEnabled && settings.autoEnhanceVisibleImages
-            ? readEnhancedImageForDisplay(
-                currentBookId,
-                settings.preferredEngine,
-                settings.zoomEnhancementScale,
-                image.imageHash,
-              ).catch(() => null)
-            : Promise.resolve<string | null>(null)
+        const imageHash = image.imageHash
+        const cacheKey = buildEnhanceKey(
+          imageHash,
+          settings.preferredEngine,
+          settings.zoomEnhancementScale,
+        )
+        const shouldReadEnhanced =
+          settings.enhancementEnabled &&
+          settings.autoEnhanceVisibleImages &&
+          !enhancedImageSpreadDataUrls[imageHash] &&
+          !imageSpreadEnhancedCacheChecksRef.current.has(cacheKey)
+        const shouldReadOriginal =
+          !imageAssetDataUrls[imageHash] &&
+          !imageSpreadLoadErrors[imageHash]
 
-        const originalImagePromise = readBookAssetImage({
-            bookId: currentBookId,
-            assetPath: image.assetPath,
-        })
-
-        const applyEnhancedDataUrl = async () => {
-          const enhancedDataUrl = await enhancedDataUrlPromise
-
-          if (!enhancedDataUrl || !isCurrentImageSpreadLoad()) {
-            return false
-          }
-
-          setImageSpreadPages((current) =>
-            current.map((page) =>
-              page.image.assetPath === image.assetPath
-                ? {
-                    ...page,
-                    displayDataUrl: enhancedDataUrl,
-                    enhancedDataUrl,
-                    loading: false,
-                  }
-                : page,
-            ),
-          )
-
-          return true
+        if (shouldReadEnhanced) {
+          imageSpreadEnhancedCacheChecksRef.current.add(cacheKey)
         }
 
-        const applyOriginalDataUrl = async () => {
-          const original = await originalImagePromise
+        const enhancedDataUrlPromise = shouldReadEnhanced
+          ? readEnhancedImageForDisplay(
+              currentBookId,
+              settings.preferredEngine,
+              settings.zoomEnhancementScale,
+              imageHash,
+            ).catch(() => null)
+          : Promise.resolve<string | null>(null)
+        const originalImagePromise = shouldReadOriginal
+          ? readBookAssetImage({
+              bookId: currentBookId,
+              assetPath: image.assetPath,
+            })
+              .then((original) => original.imageDataUrl)
+              .catch((assetError) => {
+                if (enhancedImageSpreadDataUrls[imageHash]) {
+                  return null
+                }
 
-          if (!isCurrentImageSpreadLoad()) {
-            return false
-          }
+                throw assetError
+              })
+          : Promise.resolve<string | null>(null)
 
-          setImageSpreadPages((current) =>
-            current.map((page) =>
-              page.image.assetPath === image.assetPath
-                ? {
-                    ...page,
-                    displayDataUrl: page.enhancedDataUrl ?? page.displayDataUrl ?? original.imageDataUrl,
-                    loading: false,
-                    originalDataUrl: original.imageDataUrl,
-                  }
-                : page,
-            ),
-          )
-
-          return true
-        }
-
-        const [hasEnhancedDataUrl, hasOriginalDataUrl] = await Promise.all([
-          applyEnhancedDataUrl(),
-          applyOriginalDataUrl().catch(() => false),
+        const [enhancedResult, originalResult] = await Promise.allSettled([
+          enhancedDataUrlPromise,
+          originalImagePromise,
         ])
 
         if (!isCurrentImageSpreadLoad()) {
           return
         }
 
-        if (!hasEnhancedDataUrl && !hasOriginalDataUrl) {
-            setReaderMode('epub')
-            readerModeRef.current = 'epub'
-          return
+        const hasEnhancedDataUrl =
+          enhancedResult.status === 'fulfilled' && Boolean(enhancedResult.value)
+        const hasKnownEnhancedDataUrl =
+          hasEnhancedDataUrl || Boolean(enhancedImageSpreadDataUrls[imageHash])
+
+        if (enhancedResult.status === 'fulfilled' && enhancedResult.value) {
+          const enhancedDataUrl = enhancedResult.value
+
+          setEnhancedImageSpreadDataUrls((current) => ({
+            ...current,
+            [imageHash]: enhancedDataUrl,
+          }))
+          setImageSpreadLoadErrors((current) => {
+            if (!current[imageHash]) {
+              return current
+            }
+
+            const next = { ...current }
+            delete next[imageHash]
+            return next
+          })
+        }
+
+        if (originalResult.status === 'fulfilled' && originalResult.value) {
+          const originalDataUrl = originalResult.value
+
+          setImageAssetDataUrls((current) => ({
+            ...current,
+            [imageHash]: originalDataUrl,
+          }))
+          setImageSpreadLoadErrors((current) => {
+            if (!current[imageHash]) {
+              return current
+            }
+
+            const next = { ...current }
+            delete next[imageHash]
+            return next
+          })
+        }
+
+        if (originalResult.status === 'rejected' && !hasKnownEnhancedDataUrl) {
+          setImageSpreadLoadErrors((current) => {
+            if (current[imageHash]) {
+              return current
+            }
+
+            const message =
+              originalResult.reason instanceof Error
+                ? originalResult.reason.message
+                : '画像の読み込みに失敗しました。'
+
+            return {
+              ...current,
+              [imageHash]: message,
+            }
+          })
         }
 
         if (
-          !hasEnhancedDataUrl &&
+          !hasKnownEnhancedDataUrl &&
           runId &&
           settings.enhancementEnabled &&
           (settings.autoEnhanceVisibleImages || settings.precomputeBookImages) &&
@@ -2317,17 +2327,21 @@ export function ReaderPage() {
         }
       })()
     }
+
   }, [
     currentBookId,
     enqueueBookImage,
+    enhancedImageSpreadDataUrls,
+    imageAssetDataUrls,
     imageSpreadIndex,
-    imageSpreadManifest,
-    imageSpreadPageCount,
+    imageSpreadLoadErrors,
+    imageSpreadManifest.length,
     isCurrentReaderSessionKey,
     readEnhancedImageForDisplay,
     readerMode,
     readerReady,
     updateImageSpreadLocation,
+    visibleImageSpreadItems,
   ])
 
   useEffect(() => {
@@ -2388,10 +2402,13 @@ export function ReaderPage() {
     readerDirectionRef.current = 'rtl'
     setImageSpreadManifest([])
     imageSpreadManifestRef.current = []
-    setImageSpreadPages([])
+    setImageAssetDataUrls({})
+    setEnhancedImageSpreadDataUrls({})
+    setImageSpreadLoadErrors({})
+    imageSpreadEnhancedCacheChecksRef.current.clear()
     setImageSpreadIndex(0)
+    imageSpreadIndexRef.current = 0
     setImageSpreadPageCount(getImageSpreadPageCount(containerRef.current))
-    imageSpreadLoadTokenRef.current += 1
     readerRelocationEdgesRef.current = { atEnd: false, atStart: true }
     cleanupReaderDocuments()
     currentRenderTokenRef.current += 1
@@ -2473,6 +2490,7 @@ export function ReaderPage() {
             setImageSpreadManifest(images)
             imageSpreadManifestRef.current = images
             setImageSpreadIndex(initialImageIndex)
+            imageSpreadIndexRef.current = initialImageIndex
             setImageSpreadPageCount(getImageSpreadPageCount(containerRef.current))
             bookImageManifestRef.current = images
             bookImageByHashRef.current = new Map(images.map((image) => [image.imageHash, image]))
@@ -2820,20 +2838,25 @@ export function ReaderPage() {
     zoomedImage,
   ])
 
-  const openImageSpreadPage = useCallback((page: ImageSpreadPage) => {
+  const openImageSpreadPage = useCallback((
+    image: ScannedBookImage,
+    originalDataUrl?: string,
+    enhancedDataUrl?: string,
+  ) => {
     const targetBookId = activeBookIdRef.current
     const readerSessionId = currentReaderSessionIdRef.current
+    const zoomOriginalDataUrl = originalDataUrl ?? enhancedDataUrl
 
-    if (!targetBookId || !readerSessionId || !page.originalDataUrl) {
+    if (!targetBookId || !readerSessionId || !zoomOriginalDataUrl) {
       return
     }
 
     setZoomedImage({
       bookId: targetBookId,
-      caption: page.image.assetPath,
-      enhancedDataUrl: page.enhancedDataUrl,
-      imageHash: page.image.imageHash,
-      originalDataUrl: page.originalDataUrl,
+      caption: image.assetPath,
+      enhancedDataUrl,
+      imageHash: image.imageHash,
+      originalDataUrl: zoomOriginalDataUrl,
       readerSessionId,
       sessionId: readerSessionRef.current,
     })
@@ -2912,28 +2935,40 @@ export function ReaderPage() {
           {readerMode === 'image-spread' ? (
             <div className="image-spread-reader" aria-label="画像見開きビュー">
               <div className="image-spread-pages" data-direction={readerDirection}>
-                {imageSpreadPages.map((page) => (
-                  <figure className="image-spread-page" key={page.image.assetPath}>
-                    {page.displayDataUrl ? (
-                      <img
-                        src={page.displayDataUrl}
-                        alt={page.image.assetPath}
-                        draggable={false}
-                        onDoubleClick={(event) => {
-                          event.preventDefault()
-                          event.stopPropagation()
-                          clearPendingImageClickNavigation()
-                          handleReaderActivity()
-                          openImageSpreadPage(page)
-                        }}
-                      />
-                    ) : (
-                      <div className="image-spread-placeholder">
-                        <LoaderCircle size={28} className="animate-spin" />
-                      </div>
-                    )}
-                  </figure>
-                ))}
+                {visibleImageSpreadItems.map((image) => {
+                  const imageHash = image.imageHash
+                  const originalDataUrl = imageAssetDataUrls[imageHash]
+                  const enhancedDataUrl = enhancedImageSpreadDataUrls[imageHash]
+                  const displayDataUrl = enhancedDataUrl ?? originalDataUrl
+                  const loadError = imageSpreadLoadErrors[imageHash]
+
+                  return (
+                    <figure className="image-spread-page" key={`${image.assetPath}:${imageHash}`}>
+                      {displayDataUrl ? (
+                        <img
+                          src={displayDataUrl}
+                          alt={image.assetPath}
+                          draggable={false}
+                          onDoubleClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            clearPendingImageClickNavigation()
+                            handleReaderActivity()
+                            openImageSpreadPage(image, originalDataUrl, enhancedDataUrl)
+                          }}
+                        />
+                      ) : (
+                        <div className="image-spread-placeholder">
+                          {loadError ? (
+                            <span>{loadError}</span>
+                          ) : (
+                            <LoaderCircle size={28} className="animate-spin" />
+                          )}
+                        </div>
+                      )}
+                    </figure>
+                  )
+                })}
               </div>
             </div>
           ) : null}
