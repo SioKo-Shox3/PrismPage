@@ -496,7 +496,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - notes: ユーザー決定(2026-09-27)。spec 3.3 と操作表は更新済み。DOM の Fullscreen API は利用者の操作なしに呼べないため、開いたときに全画面にするには Tauri のウィンドウ API が要る。ライブラリはウィンドウのまま、タイトルバーは Windows 標準のまま。
 
 ## V-13: 設定「ビューアを全画面で開く」
-- status: todo
+- status: done
 - done-when: 設定ストア `prismpage-settings` に `viewerFullscreen: boolean`(既定 true)を足して version を 6 から 7 に上げ、version 2〜6 の保存は各項目を引き継いで新しい項目を既定値で補う(1 以前と未知の版は今の規則どおり既定値)。設定画面の「表示」に「ビューアを全画面で開く」の切り替えがある。オフのときはビューアを開いても全画面にしない(F / F11 では切り替えられる)。テストが 6→7 の移行と、オフのときに開いても全画面にしないことを確かめている。紙・墨の設定画面のスクリーンショットを開いて切り替えが出ていることを見ている。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`

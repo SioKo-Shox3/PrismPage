@@ -67,9 +67,10 @@ export function ViewerPage() {
   const source = path ?? bookId
   const fromStart = start === 'first'
 
-  // ビューアを開いている間はウィンドウを全画面にする。次の巻・前の巻へ移ってもこの画面は残るので、
-  // 全画面のまま。閉じる(Esc・戻る・読み終わりの「閉じる」)と、全画面にしたのがビューアなら元に戻す。
-  useEffect(() => holdViewerFullscreen(), [])
+  // ビューアを開いている間はウィンドウを全画面にする(設定でオフならウィンドウのまま)。次の巻・前の巻へ
+  // 移ってもこの画面は残るので、全画面のまま。閉じる(Esc・戻る・読み終わりの「閉じる」)と、全画面にしたのが
+  // ビューアなら元に戻す。
+  useEffect(() => holdViewerFullscreen(useSettingsStore.getState().viewerFullscreen), [])
 
   // 別の本へ移ったら状態を作り直す。
   return <Viewer key={`${source}

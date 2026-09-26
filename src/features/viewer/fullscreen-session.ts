@@ -3,6 +3,7 @@ import { isWindowFullscreen, setWindowFullscreen } from '@/lib/window-fullscreen
 // ビューアの全画面。ビューアを開いている間を 1 つの区切りとし、開いたときにウィンドウを全画面にして、
 // 閉じるときはビューアが全画面にしたときだけ元のウィンドウに戻す。
 // - 開く前から全画面なら何もせず、閉じても戻さない。
+// - 設定で全画面で開かないときは、開いてもウィンドウのまま(F / F11 で全画面にしたら閉じるときに戻す)。
 // - F / F11 の切り替えは、全画面にしたらビューアが全画面にしたものとし、ウィンドウに戻したら閉じても何もしない。
 // - 次の巻・前の巻へ移っても区切りは続く(ビューアの画面は残り、中の本だけが入れ替わる)。
 // ウィンドウの操作は非同期なので、順番どおりに 1 つずつ実行する。
@@ -20,14 +21,14 @@ function enqueue(task: () => Promise<void>) {
   queue = queue.then(task).catch(() => {})
 }
 
-// ビューアを開いたことを知らせ、全画面にする。返した関数でビューアを閉じたことを知らせる。
+// ビューアを開いたことを知らせ、`enter` なら全画面にする。返した関数でビューアを閉じたことを知らせる。
 // 閉じた後の戻しは同じ処理の中で開き直されなかったときだけ行う(StrictMode の開き直しで点滅させない)。
-export function holdViewerFullscreen(): () => void {
+export function holdViewerFullscreen(enter = true): () => void {
   holders += 1
   if (!active) {
     active = true
     enqueue(async () => {
-      if (await isWindowFullscreen()) {
+      if (!enter || (await isWindowFullscreen())) {
         owned = false
         return
       }

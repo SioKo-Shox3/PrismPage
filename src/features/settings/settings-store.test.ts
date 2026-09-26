@@ -16,6 +16,7 @@ function pickPersisted() {
     enhanceScale: state.enhanceScale,
     preferredEngine: state.preferredEngine,
     theme: state.theme,
+    viewerFullscreen: state.viewerFullscreen,
     wheelReversed: state.wheelReversed,
   }
 }
@@ -71,6 +72,7 @@ describe('設定ストアの永続化', () => {
       enhanceScale: 3,
       enhancePrefetchPages: 8,
       enhanceNewBooks: true,
+      viewerFullscreen: false,
     }
     localStorage.setItem(
       STORAGE_KEY,
@@ -160,7 +162,7 @@ describe('設定ストアの永続化', () => {
     for (const key of retiredKeys) expect(saved.state).not.toHaveProperty(key)
   })
 
-  it('version 5 の設定はすべての項目を引き継ぎ、初めて開く本の AI をオフで補う', async () => {
+  it('version 5 の設定はすべての項目を引き継ぎ、初めて開く本の AI をオフ、ビューアの全画面をオンで補う', async () => {
     const version5 = {
       defaultBinding: 'left',
       defaultCoverSingle: false,
@@ -176,9 +178,45 @@ describe('設定ストアの永続化', () => {
 
     await useSettingsStore.persist.rehydrate()
 
-    expect(pickPersisted()).toEqual({ ...version5, enhanceNewBooks: false })
+    const migrated = { ...version5, enhanceNewBooks: false, viewerFullscreen: true }
+    expect(pickPersisted()).toEqual(migrated)
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')
-    expect(saved.version).toBe(6)
-    expect(saved.state).toEqual({ ...version5, enhanceNewBooks: false })
+    expect(saved.version).toBe(7)
+    expect(saved.state).toEqual(migrated)
+  })
+
+  it('version 6 の設定はすべての項目を引き継ぎ、ビューアの全画面をオンで補う', async () => {
+    const version6 = {
+      defaultBinding: 'left',
+      defaultCoverSingle: false,
+      defaultSpreadMode: 'single',
+      enhanceModels: { 'real-cugan': 'models-pro' },
+      enhanceNewBooks: true,
+      enhancePrefetchPages: 2,
+      enhanceScale: 4,
+      preferredEngine: 'real-cugan',
+      theme: 'paper',
+      wheelReversed: true,
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 6, state: version6 }))
+
+    await useSettingsStore.persist.rehydrate()
+
+    const migrated = { ...version6, viewerFullscreen: true }
+    expect(pickPersisted()).toEqual(migrated)
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')
+    expect(saved.version).toBe(7)
+    expect(saved.state).toEqual(migrated)
+  })
+
+  it('未知の新しい版は引き継がず既定値に戻す', async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION + 1, state: { ...defaultSettings, theme: 'ink', viewerFullscreen: false } }),
+    )
+
+    await useSettingsStore.persist.rehydrate()
+
+    expect(pickPersisted()).toEqual(defaultSettings)
   })
 })
