@@ -461,3 +461,24 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
 - paths: src-tauri/src/**, src/**
 - notes: ユーザー決定(2026-09-26)。危険地帯(フロントと Rust の契約)。評価者を通す。読みかけ・履歴から開き直したときはフォルダを開くので `'book'` になる。
+
+# MS9 AI 超解像の分かりやすさ(0.2.2 の実機確認から)
+
+## V-11: AI ボタンを「AI オン」「AI オフ」と文字で示し、オンのときは朱の地にする
+- status: todo
+- done-when: ビューアの情報バーの AI ボタンの文字が、本の AI がオンのとき「AI オン」、オフのとき「AI オフ」になる(アイコンはそのまま)。オンのときは朱の地(`--color-accent` とその上の文字色のトークン。紙・墨とも対比 4.5:1 以上)、オフのときは今の控えめな見た目にする。`aria-pressed` は今までどおりで、`title` はオン・オフに合わせて「AI 超解像をオフにする」「この本を AI 超解像で高解像度にして表示する」にする。ボタンを押すと文字と `aria-pressed` が切り替わるテストがある。紙・墨の `run shots` に AI をオンにした情報バーの画面を 1 枚ずつ足し、開いて見ている。
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run shots`
+- paths: src/features/viewer/**, src/design/**, src/lib/tauri-mock.ts, scripts/shots/**
+- notes: ユーザー決定(2026-09-26)。spec 3.5 は更新済み。
+
+## A-07: 「初めて開く本でも AI をオンにする」の設定
+- status: todo
+- done-when: 設定ストア `prismpage-settings` に `enhanceNewBooks: boolean`(既定 false)を足して version を 5 から 6 に上げ、version 2〜5 の保存は各項目を引き継いで新しい項目を既定値で補う(1 以前と未知の版は今の規則どおり既定値)。設定画面の「AI 超解像」に「初めて開く本でも AI をオンにする」の切り替えがある。本ごとの記録 `prismpage-enhanced-books` を、オンにした本だけでなく利用者が切り替えた本のオン・オフを覚える形(例: 本 ID → 真偽、古く切り替えた順に 500 冊まで)に変えて version を 1 から 2 に上げ、version 1 の `bookIds` はすべて「オン」の記録として引き継ぐ。記録の無い本はこの設定に従い、記録のある本は記録に従う(設定がオンでも、オフに切り替えた本はオフのまま)。テストが、設定の 5→6 の移行、本ごとの記録の 1→2 の移行、記録の無い本が設定に従うこと、オフの記録が設定より優先されることを確かめている。
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
+- paths: src/features/settings/**, src/features/viewer/**, src/lib/**
+- notes: ユーザー決定(2026-09-26)。危険地帯(永続化の形式)。評価者を通す。
