@@ -54,6 +54,8 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {}
   // jsdom は画像のデコード(先読みが使う)を持たない。
   HTMLImageElement.prototype.decode = () => Promise.resolve()
+  // jsdom はポインタの捕捉を持たない。
+  Element.prototype.setPointerCapture = () => {}
   // jsdom は ResizeObserver を持たない。画面の大きさは 0 のまま(自動は単ページ)で試す。
   globalThis.ResizeObserver = class {
     observe() {}
@@ -169,6 +171,85 @@ describe('ビューアの操作', () => {
     expect(viewer.dataset.ui).toBe('visible')
     fireEvent.click(stage, { clientX: 600, clientY: 400 })
     expect(viewer.dataset.ui).toBe('hidden')
+  })
+
+  it('出ている UI は、帯の外でもポインタを動かし続ける間は隠れない', async () => {
+    const { viewer } = await renderHiddenViewer()
+
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: 0, pointerType: 'mouse' })
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: 400, pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(2000))
+    fireEvent.pointerMove(viewer, { clientX: 620, clientY: 420, pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(UI_HIDE_DELAY_MS - 1))
+    expect(viewer.dataset.ui).toBe('visible')
+    act(() => vi.advanceTimersByTime(1))
+    expect(viewer.dataset.ui).toBe('hidden')
+
+    // 隠れた後に帯の外で動かしても出さない。
+    fireEvent.pointerMove(viewer, { clientX: 640, clientY: 440, pointerType: 'mouse' })
+    expect(viewer.dataset.ui).toBe('hidden')
+  })
+
+  it('最後のページから次へ進んで読み終わりの案内を出しても、情報バーは出さない', async () => {
+    const { viewer } = await renderHiddenViewer()
+
+    fireEvent.keyDown(window, { key: 'End' })
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    expect(screen.getByText('読み終わりました')).toBeTruthy()
+    expect(viewer.dataset.ui).toBe('hidden')
+    expect(viewer.dataset.finished).toBe('')
+  })
+
+  it('下端中央のスライダーは右綴じで右端が先頭になり、ドラッグ中は行き先を出して離した所へ移る', async () => {
+    const { viewer } = await renderViewer()
+    const slider = screen.getByRole('slider', { name: 'ページ移動' })
+    expect(slider.getAttribute('aria-valuemin')).toBe('1')
+    expect(slider.getAttribute('aria-valuemax')).toBe('5')
+    expect(slider.getAttribute('aria-valuenow')).toBe('1')
+    expect(slider.getAttribute('aria-valuetext')).toBe('1 / 5 ページ')
+    // 右綴じは右端に現在のページ、左端に総ページ。つまみは右端。
+    const ends = Array.from(slider.parentElement!.children).filter((element) => element !== slider)
+    expect(ends.map((element) => element.textContent)).toEqual(['5', '1'])
+    const thumb = slider.lastElementChild as HTMLElement
+    expect(thumb.style.left).toBe('100%')
+
+    vi.spyOn(slider, 'getBoundingClientRect').mockReturnValue(
+      DOMRect.fromRect({ x: 240, y: 760, width: 400, height: 28 }),
+    )
+    // 右端(先頭)から、左から 1/4 の所(4 ページ目)へドラッグする。
+    fireEvent.pointerDown(slider, { clientX: 640, clientY: 770, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(slider, { clientX: 340, clientY: 770, pointerId: 1 })
+    expect(screen.getByText('4 / 5')).toBeTruthy()
+    expect(thumb.style.left).toBe('25%')
+    // 離すまでは移らない。
+    expect(slider.getAttribute('aria-valuenow')).toBe('1')
+
+    fireEvent.pointerUp(slider, { clientX: 340, clientY: 770, pointerId: 1 })
+    expect(slider.getAttribute('aria-valuenow')).toBe('4')
+    expect(screen.getByAltText('4 ページ')).toBeTruthy()
+    expect(Array.from(slider.parentElement!.children).map((element) => element.textContent)[2]).toBe('4')
+    expect(viewer.dataset.ui).toBe('visible')
+  })
+
+  it('スライダーはフォーカス中の ← / → / Home / End で綴じ方向に合わせて動き、ページ送りと二重に動かない', async () => {
+    await renderViewer()
+    const slider = screen.getByRole('slider', { name: 'ページ移動' })
+    slider.focus()
+
+    // 右綴じは ← が次。
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' })
+    expect(slider.getAttribute('aria-valuenow')).toBe('2')
+    fireEvent.keyDown(slider, { key: 'End' })
+    expect(slider.getAttribute('aria-valuenow')).toBe('5')
+    fireEvent.keyDown(slider, { key: 'ArrowRight' })
+    expect(slider.getAttribute('aria-valuenow')).toBe('4')
+    fireEvent.keyDown(slider, { key: 'Home' })
+    expect(slider.getAttribute('aria-valuenow')).toBe('1')
+
+    // 左綴じに変えると → が次。
+    fireEvent.keyDown(window, { key: 'b' })
+    fireEvent.keyDown(slider, { key: 'ArrowRight' })
+    expect(slider.getAttribute('aria-valuenow')).toBe('2')
   })
 
   it('Home / End・T で位置と見開きが変わり、Esc でビューアを閉じる', async () => {

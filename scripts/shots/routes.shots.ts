@@ -49,6 +49,34 @@ for (const theme of themes) {
   })
 }
 
+// ビューアの情報バー(上端のバーと下端中央のスライダー)を出した状態。ポインタを下端の帯に置いて出したままにする。
+for (const theme of themes) {
+  test(`${theme.name} viewer-bar`, async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    await page.emulateMedia({ colorScheme: theme.colorScheme })
+
+    await page.goto('/viewer/sample-manga')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme.name)
+    const slider = page.getByRole('slider', { name: 'ページ移動' })
+    await expect(slider).toBeVisible()
+    await page.waitForFunction('document.fonts.status === "loaded"')
+
+    const viewport = page.viewportSize()
+    if (!viewport) throw new Error('画面の大きさが分かりません')
+    await page.mouse.move(viewport.width / 2, viewport.height - 8)
+    await slider.focus()
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.locator('[data-ui]')).toHaveAttribute('data-ui', 'visible')
+    await expect(slider).toHaveAttribute('aria-valuenow', /^[2-9]/)
+    await slider.blur()
+
+    await page.screenshot({ path: path.join(shotsDir, `${theme.name}-viewer-bar.png`) })
+    expect(pageErrors).toEqual([])
+  })
+}
+
 test('モックのサンプルの本と合成ページ画像が配信される', async ({ request }) => {
   const library = await request.get('/mock/library.json')
   expect(library.ok()).toBe(true)

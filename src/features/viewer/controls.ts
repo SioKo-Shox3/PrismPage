@@ -173,11 +173,3 @@ export function swipeCommand(
   const towardRight = dx > 0
   return towardRight === (binding === 'right') ? 'next' : 'prev'
 }
-
-// 進捗線の上の位置(左端 0〜右端 1)を見開き番号に変える。右綴じの進捗線は右から伸びるので左右を反転する。
-export function seekSpreadIndex(ratio: number, spreadCount: number, binding: Binding): number {
-  if (spreadCount <= 0) return -1
-  const clamped = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0
-  const progress = binding === 'right' ? 1 - clamped : clamped
-  return Math.min(spreadCount - 1, Math.floor(progress * spreadCount))
-}

@@ -424,7 +424,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - notes: ユーザー決定(2026-09-26)。マウスのクリックでページを送る読み方で、マウスを動かすたびにバーが出るのを止める。spec 3.3 は更新済み。
 
 ## V-08: 下端中央のページ移動スライダー
-- status: todo
+- status: done
 - done-when: 情報バーが出ている間、下端中央(幅は画面の 60%、最大 720px ほど)につまみ付きのスライダーが出る。左右の端に現在のページ(見開きなら先のページ)と総ページを出し、つまみのドラッグ中はつまみの上に行き先のページ番号を出し、離した所の見開きへ移る。右綴じは右が先頭(右から左へ進む)。`role="slider"` と `aria-valuemin`・`aria-valuemax`・`aria-valuenow`・`aria-valuetext` を持ち、フォーカス中の ← / → / Home / End で動かせる(綴じ方向に合わせる)。情報バーが隠れている間は今の細い進捗線だけを出し、進捗線はドラッグで動かさない(表示のみ)。スライダーの位置計算は純粋関数にしてテストがあり(右綴じ・左綴じ、端、見開き)、ドラッグで移るテストがある。紙・墨の `run shots` にバーを出した状態のビューアを 1 枚ずつ足し、開いて見ている。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
