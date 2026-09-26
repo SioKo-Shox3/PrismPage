@@ -465,7 +465,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 # MS9 AI 超解像の分かりやすさ(0.2.2 の実機確認から)
 
 ## V-11: AI ボタンを「AI オン」「AI オフ」と文字で示し、オンのときは朱の地にする
-- status: todo
+- status: done
 - done-when: ビューアの情報バーの AI ボタンの文字が、本の AI がオンのとき「AI オン」、オフのとき「AI オフ」になる(アイコンはそのまま)。オンのときは朱の地(`--color-accent` とその上の文字色のトークン。紙・墨とも対比 4.5:1 以上)、オフのときは今の控えめな見た目にする。`aria-pressed` は今までどおりで、`title` はオン・オフに合わせて「AI 超解像をオフにする」「この本を AI 超解像で高解像度にして表示する」にする。ボタンを押すと文字と `aria-pressed` が切り替わるテストがある。紙・墨の `run shots` に AI をオンにした情報バーの画面を 1 枚ずつ足し、開いて見ている。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`

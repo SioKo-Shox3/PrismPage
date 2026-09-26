@@ -107,9 +107,27 @@ function pageImage(index: number) {
 }
 
 describe('ビューアの AI 切り替え', () => {
+  it('ボタンの文字・aria-pressed・title がオンとオフで切り替わる', async () => {
+    await renderViewer()
+    const button = screen.getByRole('button', { name: 'AI オフ' })
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(button.getAttribute('title')).toBe('この本を AI 超解像で高解像度にして表示する')
+
+    fireEvent.click(button)
+    await vi.waitFor(() => expect(button.textContent).toBe('AI オン'))
+    expect(screen.getByRole('button', { name: 'AI オン' })).toBe(button)
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    expect(button.getAttribute('title')).toBe('AI 超解像をオフにする')
+
+    fireEvent.click(button)
+    await vi.waitFor(() => expect(button.textContent).toBe('AI オフ'))
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(button.getAttribute('title')).toBe('この本を AI 超解像で高解像度にして表示する')
+  })
+
   it('ON で表示中と次の 4 ページを要求し、終わったページを差し替えて状態を出し、本ごとに覚える', async () => {
     await renderViewer()
-    const button = screen.getByRole('button', { name: 'AI' })
+    const button = screen.getByRole('button', { name: 'AI オフ' })
     expect(button.getAttribute('aria-pressed')).toBe('false')
 
     fireEvent.click(button)
@@ -205,7 +223,7 @@ describe('ビューアの AI 切り替え', () => {
     tauri.statuses = [engine('waifu2x', false), engine('real-cugan', false)]
     await renderViewer()
 
-    fireEvent.click(screen.getByRole('button', { name: 'AI' }))
+    fireEvent.click(screen.getByRole('button', { name: 'AI オフ' }))
     expect(await screen.findByText(/AI エンジンが未登録です/)).toBeTruthy()
     const link = screen.getByRole('link', { name: '設定で登録する' })
     expect(link.getAttribute('href')).toBe('/settings#ai-engines')
@@ -216,7 +234,7 @@ describe('ビューアの AI 切り替え', () => {
     tauri.listenFails = true
     await renderViewer()
 
-    fireEvent.click(screen.getByRole('button', { name: 'AI' }))
+    fireEvent.click(screen.getByRole('button', { name: 'AI オフ' }))
     expect(await screen.findByText(/AI を使えません: 処理状況を受け取れません/)).toBeTruthy()
     expect(tauri.request).not.toHaveBeenCalled()
   })
@@ -234,7 +252,7 @@ describe('ビューアの AI 切り替え', () => {
     expect(menu.textContent).toContain('AI をオンにすると使えます。')
     fireEvent.keyDown(menu, { key: 'Escape' })
 
-    fireEvent.click(screen.getByRole('button', { name: 'AI' }))
+    fireEvent.click(screen.getByRole('button', { name: 'AI オフ' }))
     await vi.waitFor(() => expect(tauri.request).toHaveBeenCalled())
     openMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: '全ページを事前処理' }))

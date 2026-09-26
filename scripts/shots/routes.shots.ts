@@ -17,9 +17,10 @@ const routes = [
   { name: 'viewer', path: '/viewer/sample-manga', withNav: false },
 ]
 
+// accent / onAccent は tokens.css の --color-accent / --color-on-accent を計算値の形で写したもの。
 const themes = [
-  { name: 'paper', colorScheme: 'light' },
-  { name: 'ink', colorScheme: 'dark' },
+  { name: 'paper', colorScheme: 'light', accent: 'rgb(169, 59, 40)', onAccent: 'rgb(251, 248, 241)' },
+  { name: 'ink', colorScheme: 'dark', accent: 'rgb(224, 120, 92)', onAccent: 'rgb(28, 26, 23)' },
 ] as const
 
 for (const theme of themes) {
@@ -73,6 +74,37 @@ for (const theme of themes) {
     await slider.blur()
 
     await page.screenshot({ path: path.join(shotsDir, `${theme.name}-viewer-bar.png`) })
+    expect(pageErrors).toEqual([])
+  })
+}
+
+// AI をオンにした情報バー。オンのボタンは朱の地で「AI オン」と出る。
+for (const theme of themes) {
+  test(`${theme.name} viewer-bar-ai-on`, async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    await page.emulateMedia({ colorScheme: theme.colorScheme })
+
+    await page.goto('/viewer/sample-manga')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme.name)
+    await expect(page.getByRole('slider', { name: 'ページ移動' })).toBeVisible()
+    await page.waitForFunction('document.fonts.status === "loaded"')
+
+    const viewport = page.viewportSize()
+    if (!viewport) throw new Error('画面の大きさが分かりません')
+    await page.mouse.move(viewport.width / 2, 8)
+    await expect(page.locator('[data-ui]')).toHaveAttribute('data-ui', 'visible')
+    await page.getByRole('button', { name: 'AI オフ' }).click()
+    const button = page.getByRole('button', { name: 'AI オン' })
+    await expect(button).toHaveAttribute('aria-pressed', 'true')
+    // 押した直後のホバーの色ではなく、オンの地の色で撮る。
+    await page.mouse.move(viewport.width / 2, 40)
+    await expect(page.locator('[data-ui]')).toHaveAttribute('data-ui', 'visible')
+    // 色の切り替えのトランジションが終わるまで待つ(朱の地と、その上の文字色)。
+    await expect(button).toHaveCSS('background-color', theme.accent)
+    await expect(button).toHaveCSS('color', theme.onAccent)
+
+    await page.screenshot({ path: path.join(shotsDir, `${theme.name}-viewer-bar-ai-on.png`) })
     expect(pageErrors).toEqual([])
   })
 }
