@@ -6,7 +6,7 @@ import { routeTree } from '@/app/router'
 import type { AdjacentBooks, OpenedBook } from '@/types/app'
 
 import { POSITION_SAVE_INTERVAL_MS } from './use-book-persistence'
-import { PRELOAD_RADIUS, UI_HIDE_DELAY_MS } from './viewer-state'
+import { PRELOAD_RADIUS, UI_EDGE_BAND_PX, UI_HIDE_DELAY_MS } from './viewer-state'
 
 const saved = vi.hoisted(() => ({
   position: vi.fn<(bookId: string, page: number) => Promise<void>>(() => Promise.resolve()),
@@ -92,19 +92,82 @@ async function renderViewer(firstLabel = '1 / 5', entries = [`/viewer/${book.boo
 }
 
 describe('ビューアの操作', () => {
-  it('ページ送りのキー操作で UI を隠すまでの時間を数え直す', async () => {
+  // 画面を 1200×800 とし、開いたときに出ている UI を隠した状態から始める。開いたときの隠すタイマーは
+  // 実時計で張られるので、帯に出入りして仮想時計で張り直してから進める。
+  async function renderHiddenViewer() {
     const { viewer } = await renderViewer()
+    const stage = screen.getByRole('region', { name: 'ページ' })
+    for (const element of [viewer, stage]) {
+      vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(
+        DOMRect.fromRect({ x: 0, y: 0, width: 1200, height: 800 }),
+      )
+    }
     vi.useFakeTimers()
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: 0, pointerType: 'mouse' })
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: 400, pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(UI_HIDE_DELAY_MS))
+    expect(viewer.dataset.ui).toBe('hidden')
+    return { viewer, stage }
+  }
 
-    fireEvent.pointerMove(viewer)
-    act(() => vi.advanceTimersByTime(2000))
-    fireEvent.keyDown(window, { key: 'ArrowLeft' })
-    expect(screen.getByText('2 / 5')).toBeTruthy()
+  it('中央付近でポインタを動かしても UI は出ず、上端・下端の帯に入ると出る', async () => {
+    const { viewer } = await renderHiddenViewer()
 
-    // 最初のポインタ移動から 2.5 秒を過ぎても、キー操作から 2.5 秒経つまでは隠さない。
-    act(() => vi.advanceTimersByTime(1000))
+    for (const clientY of [UI_EDGE_BAND_PX, 400, 800 - UI_EDGE_BAND_PX - 1]) {
+      fireEvent.pointerMove(viewer, { clientX: 600, clientY, pointerType: 'mouse' })
+      expect(viewer.dataset.ui).toBe('hidden')
+    }
+
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: UI_EDGE_BAND_PX - 1, pointerType: 'mouse' })
     expect(viewer.dataset.ui).toBe('visible')
-    act(() => vi.advanceTimersByTime(UI_HIDE_DELAY_MS - 1000))
+    // 帯の中にいる間は時間が経っても隠さない。
+    act(() => vi.advanceTimersByTime(UI_HIDE_DELAY_MS * 2))
+    expect(viewer.dataset.ui).toBe('visible')
+
+    // 帯から出て 2.5 秒で隠す。
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: 400, pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(UI_HIDE_DELAY_MS - 1))
+    expect(viewer.dataset.ui).toBe('visible')
+    act(() => vi.advanceTimersByTime(1))
+    expect(viewer.dataset.ui).toBe('hidden')
+
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: 800 - UI_EDGE_BAND_PX, pointerType: 'mouse' })
+    expect(viewer.dataset.ui).toBe('visible')
+  })
+
+  it('左右のクリック・ホイール・キーでページを送っても UI は出ず、帯の中なら出したまま送る', async () => {
+    const { viewer, stage } = await renderHiddenViewer()
+
+    fireEvent.click(stage, { clientX: 100, clientY: 400 })
+    expect(screen.getByText('2 / 5')).toBeTruthy()
+    fireEvent.wheel(stage, { deltaY: 1000 })
+    expect(screen.getByText('3 / 5')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    expect(screen.getByText('4 / 5')).toBeTruthy()
+    expect(viewer.dataset.ui).toBe('hidden')
+
+    fireEvent.pointerMove(viewer, { clientX: 600, clientY: 790, pointerType: 'mouse' })
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    expect(screen.getByText('3 / 5')).toBeTruthy()
+    expect(viewer.dataset.ui).toBe('visible')
+  })
+
+  it('中央クリックで出した UI は時間では隠れず、ページを送ると隠れる', async () => {
+    const { viewer, stage } = await renderHiddenViewer()
+
+    fireEvent.click(stage, { clientX: 600, clientY: 400 })
+    expect(viewer.dataset.ui).toBe('visible')
+    act(() => vi.advanceTimersByTime(UI_HIDE_DELAY_MS * 4))
+    expect(viewer.dataset.ui).toBe('visible')
+
+    fireEvent.click(stage, { clientX: 100, clientY: 400 })
+    expect(screen.getByText('2 / 5')).toBeTruthy()
+    expect(viewer.dataset.ui).toBe('hidden')
+
+    // もう一度の中央クリックでも隠れる。
+    fireEvent.click(stage, { clientX: 600, clientY: 400 })
+    expect(viewer.dataset.ui).toBe('visible')
+    fireEvent.click(stage, { clientX: 600, clientY: 400 })
     expect(viewer.dataset.ui).toBe('hidden')
   })
 
@@ -136,11 +199,13 @@ describe('ビューアの操作', () => {
     expect(screen.getByText('2 / 5')).toBeTruthy()
     fireEvent.click(stage, { clientX: 1100 })
     expect(screen.getByText('1 / 5')).toBeTruthy()
+    // 開いたときに出ていた UI はページ送りで隠れる。
+    expect(viewer.dataset.ui).toBe('hidden')
 
     fireEvent.click(stage, { clientX: 600 })
-    expect(viewer.dataset.ui).toBe('hidden')
-    fireEvent.click(stage, { clientX: 600 })
     expect(viewer.dataset.ui).toBe('visible')
+    fireEvent.click(stage, { clientX: 600 })
+    expect(viewer.dataset.ui).toBe('hidden')
   })
 
   it('左右の領域のダブルクリックは拡大せず、クリックごとにすぐページを送る', async () => {

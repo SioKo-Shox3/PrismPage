@@ -9,6 +9,7 @@ import {
   fitSpread,
   initialViewerState,
   preloadPages,
+  uiHides,
   viewerReducer,
   type ViewerState,
 } from './viewer-state'
@@ -85,15 +86,39 @@ describe('ビューアの状態', () => {
     expect(viewerReducer(released, { type: 'hideUi' }).ui.visible).toBe(false)
   })
 
-  it('ページを動かす操作は UI を隠すまでの時間を数え直し、表示・非表示は変えない', () => {
-    const shown = viewerReducer(opened(), { type: 'activity' })
-    const moved = viewerReducer(shown, { type: 'next', spreads })
-    expect(moved.ui).toEqual({ ...shown.ui, activity: shown.ui.activity + 1 })
+  it('ページ送りは UI を出さず、ポインタが帯にある間だけ出したままにする', () => {
+    const hidden = viewerReducer(opened(), { type: 'hideUi' })
+    for (const action of [
+      { type: 'next', spreads },
+      { type: 'last', spreads },
+      { type: 'seek', page: 3 },
+    ] as const) {
+      const moved = viewerReducer(hidden, action)
+      expect(moved.page).not.toBe(hidden.page)
+      expect(moved.ui.visible).toBe(false)
+    }
 
-    const hidden = viewerReducer(shown, { type: 'hideUi' })
-    const movedHidden = viewerReducer(hidden, { type: 'next', spreads })
-    expect(movedHidden.page).toBe(1)
-    expect(movedHidden.ui.visible).toBe(false)
+    const inBand = viewerReducer(hidden, { type: 'edgeBand', inside: true })
+    expect(inBand.ui.visible).toBe(true)
+    const movedInBand = viewerReducer(inBand, { type: 'next', spreads })
+    expect(movedInBand.ui.visible).toBe(true)
+    expect(viewerReducer(movedInBand, { type: 'hideUi' }).ui.visible).toBe(true)
+  })
+
+  it('帯から出ると隠せるようになり、中央クリックで出した UI はページ送りまで隠さない', () => {
+    const inBand = viewerReducer(viewerReducer(opened(5, 3), { type: 'hideUi' }), { type: 'edgeBand', inside: true })
+    const left = viewerReducer(inBand, { type: 'edgeBand', inside: false })
+    expect(uiHides(left.ui)).toBe(true)
+    expect(left.ui.activity).toBeGreaterThan(inBand.ui.activity)
+    expect(viewerReducer(left, { type: 'hideUi' }).ui.visible).toBe(false)
+
+    const pinned = viewerReducer(viewerReducer(left, { type: 'hideUi' }), { type: 'toggleUi' })
+    expect(pinned.ui).toMatchObject({ visible: true, pinned: true })
+    expect(viewerReducer(pinned, { type: 'hideUi' }).ui.visible).toBe(true)
+    // 組み方の切り替えはページ送りではないので出したまま。
+    expect(viewerReducer(pinned, { type: 'toggleShift' }).ui.visible).toBe(true)
+    const moved = viewerReducer(pinned, { type: 'prev', spreads })
+    expect(moved.ui).toMatchObject({ visible: false, pinned: false })
   })
 
   it('Home / End は最初・最後の見開きへ動き、読み終わりから抜ける', () => {
@@ -139,7 +164,7 @@ describe('ビューアの状態', () => {
     const zoomed = viewerReducer(opened(), { type: 'setZoom', zoom })
     expect(zoomed.zoom).toEqual(zoom)
     expect(viewerReducer(zoomed, { type: 'toggleUi' }).zoom).toEqual(zoom)
-    expect(viewerReducer(zoomed, { type: 'activity' }).zoom).toEqual(zoom)
+    expect(viewerReducer(zoomed, { type: 'edgeBand', inside: true }).zoom).toEqual(zoom)
 
     expect(viewerReducer(zoomed, { type: 'next', spreads }).zoom).toBeNull()
     expect(viewerReducer(zoomed, { type: 'seek', page: 3 }).zoom).toBeNull()
