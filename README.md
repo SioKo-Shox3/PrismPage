@@ -133,8 +133,8 @@ GitHub Actions の `release` workflow は `app-v<版>` のタグで Windows イ�
 この workflow が署名鍵(`TAURI_SIGNING_PRIVATE_KEY`)を使って作ります。手元のビルドでは作りません。
 
 ```powershell
-git tag app-v0.2.0
-git push origin app-v0.2.0
+git tag app-v0.2.1
+git push origin app-v0.2.1
 ```
 
 ## 構成
