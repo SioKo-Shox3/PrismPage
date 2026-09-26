@@ -852,14 +852,15 @@ function TopBar({
       </div>
       <Button
         size="sm"
-        variant={enhancement?.enabled ? 'secondary' : 'ghost'}
+        // オンは朱の地(primary)で、オフは他の切り替えと同じ控えめな見た目で示す。
+        variant={enhancement?.enabled ? 'primary' : 'ghost'}
         disabled={!enhancement}
         aria-pressed={enhancement?.enabled ?? false}
-        title="この本を AI 超解像で高解像度にして表示する"
+        title={enhancement?.enabled ? 'AI 超解像をオフにする' : 'この本を AI 超解像で高解像度にして表示する'}
         onClick={() => enhancement?.toggle()}
       >
         <ImageUpscale size={14} aria-hidden="true" />
-        AI
+        {enhancement?.enabled ? 'AI オン' : 'AI オフ'}
       </Button>
       <Button
         size="sm"
