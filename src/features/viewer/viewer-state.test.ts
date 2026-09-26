@@ -121,6 +121,24 @@ describe('ビューアの状態', () => {
     expect(moved.ui).toMatchObject({ visible: false, pinned: false })
   })
 
+  it('帯の外でのポインタの動きは隠すまでの時間だけを数え直し、隠れた UI は出さない', () => {
+    const shown = viewerReducer(viewerReducer(opened(), { type: 'hideUi' }), { type: 'toggleUi' })
+    const unpinned = { ...shown, ui: { ...shown.ui, pinned: false } }
+    const moved = viewerReducer(unpinned, { type: 'pointerActive' })
+    expect(moved.ui.activity).toBeGreaterThan(unpinned.ui.activity)
+    expect(moved.ui.visible).toBe(true)
+
+    const hidden = viewerReducer(unpinned, { type: 'hideUi' })
+    expect(viewerReducer(hidden, { type: 'pointerActive' })).toBe(hidden)
+  })
+
+  it('スライダーでのシークは出ている UI を隠さない', () => {
+    const pinned = viewerReducer(viewerReducer(opened(), { type: 'hideUi' }), { type: 'toggleUi' })
+    const sought = viewerReducer(pinned, { type: 'seek', page: 3 })
+    expect(sought.page).toBe(3)
+    expect(sought.ui).toMatchObject({ visible: true, pinned: true })
+  })
+
   it('Home / End は最初・最後の見開きへ動き、読み終わりから抜ける', () => {
     let state = opened(5, 2)
     state = viewerReducer(state, { type: 'last', spreads })

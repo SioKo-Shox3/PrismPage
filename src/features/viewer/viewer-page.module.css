@@ -1,4 +1,4 @@
-/* ビューア: 紙色(墨色)の地を全画面に敷き、中央に見開き、上端に文字のバー、下端に細い進捗線 */
+/* ビューア: 紙色(墨色)の地を全画面に敷き、中央に見開き、上端に文字のバー、下端中央にスライダー(隠れている間は細い進捗線) */
 .viewer {
   position: fixed;
   inset: 0;
@@ -7,7 +7,7 @@
   color: var(--color-text);
 }
 
-.viewer[data-ui='hidden'] {
+.viewer[data-ui='hidden']:not([data-finished]) {
   cursor: none;
 }
 
@@ -79,34 +79,109 @@
   padding: var(--space-2) var(--space-4);
   border-bottom: var(--rule-width) solid var(--color-rule);
   background: color-mix(in srgb, var(--color-bg) 92%, transparent);
-  transition: opacity var(--duration-normal) var(--easing-standard);
+  transition:
+    opacity var(--duration-normal) var(--easing-standard),
+    visibility var(--duration-normal) var(--easing-standard);
 }
 
+/* 下端。スライダーの外のクリックは下の見開きへ通す */
 .bottomBar {
   position: absolute;
   right: 0;
   bottom: 0;
   left: 0;
-  padding-top: var(--space-3);
-  padding-bottom: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+
+/* 下端中央のページ移動スライダー(情報バーが出ている間だけ) */
+.slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: min(60%, 720px);
+  min-width: min(100% - 2 * var(--space-4), 320px);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+  transition:
+    opacity var(--duration-normal) var(--easing-standard),
+    visibility var(--duration-normal) var(--easing-standard);
+}
+
+.sliderEnd {
+  flex: none;
+  min-width: 3ch;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.sliderTrack {
+  position: relative;
+  flex: 1;
+  height: var(--control-height-sm);
+  border-radius: var(--radius-pill);
   cursor: pointer;
   touch-action: none;
-  transition: opacity var(--duration-normal) var(--easing-standard);
 }
 
-/* 右綴じは右から左へ読み進むので、進捗線も右から伸ばす */
-.bottomBar[data-binding='right'] .progress {
-  transform: scaleX(-1);
+.sliderTrack:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
 
-/* シーク中は線を太らせ、行き先のページ番号を線の上に出す */
-.bottomBar[data-seeking] .progress {
+.sliderRail,
+.sliderFill {
+  position: absolute;
+  top: 50%;
   height: 4px;
+  border-radius: var(--radius-pill);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
+.sliderRail {
+  right: 0;
+  left: 0;
+  background: var(--color-rule);
+}
+
+/* 先頭の端からつまみまでを塗る(右綴じは右から) */
+.sliderFill {
+  background: var(--color-accent);
+}
+
+.sliderThumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-bg);
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: var(--shadow-sm);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.sliderTrack[data-seeking] .sliderThumb {
+  width: 18px;
+  height: 18px;
+}
+
+/* ドラッグ中はつまみの上に行き先のページ番号を出す */
 .seekLabel {
   position: absolute;
-  bottom: calc(100% - var(--space-2));
+  bottom: calc(100% + var(--space-2));
+  left: 50%;
   padding: var(--space-1) var(--space-2);
   border: var(--rule-width) solid var(--color-rule);
   border-radius: var(--radius-md);
@@ -115,12 +190,27 @@
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  pointer-events: none;
   transform: translateX(-50%);
 }
 
+/* 情報バーが隠れている間だけ出す細い進捗線。表示だけで操作は受けない */
+.progress {
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--easing-standard);
+}
+
+/* 右綴じは右から左へ読み進むので、進捗線も右から伸ばす */
+.bottomBar[data-binding='right'] .progress {
+  transform: scaleX(-1);
+}
+
+.viewer[data-ui='hidden'] .progress {
+  opacity: 1;
+}
+
 .viewer[data-ui='hidden'] .topBar,
-.viewer[data-ui='hidden'] .bottomBar {
+.viewer[data-ui='hidden'] .slider {
+  visibility: hidden;
   opacity: 0;
   pointer-events: none;
 }
@@ -333,7 +423,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .topBar,
-  .bottomBar {
+  .slider,
+  .progress {
     transition: none;
   }
 }

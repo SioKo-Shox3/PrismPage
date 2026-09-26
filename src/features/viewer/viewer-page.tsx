@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type {
   ImgHTMLAttributes,
+  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
 } from 'react'
@@ -19,13 +20,13 @@ import {
   clickCommand,
   initialWheelGate,
   keyCommand,
-  seekSpreadIndex,
   swipeCommand,
   wheelPixels,
   wheelStep,
   type ViewerCommand,
 } from './controls'
 import { batchStatusText, enhanceStatusText, type BatchProgress } from './enhancement'
+import { sliderEnds, sliderIndexAt, sliderKeyIndex, sliderRatio } from './page-slider'
 import { PagePreloader, acquireImage, releaseImage } from './preload'
 import { useEnhancement, type EnhancementView } from './use-enhancement'
 import { useBookPersistence } from './use-book-persistence'
@@ -57,7 +58,8 @@ import {
 } from './zoom'
 import styles from './viewer-page.module.css'
 
-// ビューア画面。本を開き、紙色の地の中央に現在の見開きを出す。上端に文字のバー、下端に細い進捗線。
+// ビューア画面。本を開き、紙色の地の中央に現在の見開きを出す。情報バーが出ている間は上端に文字のバー、
+// 下端中央にページ移動のスライダーを出し、隠れている間は下端に細い進捗線だけを出す。
 export function ViewerPage() {
   const { bookId } = useParams({ from: '/viewer/$bookId' })
   const { path, start } = useSearch({ from: '/viewer/$bookId' })
@@ -146,7 +148,8 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
     return () => window.clearTimeout(timer)
   }, [hides, ui.activity])
 
-  // ポインタが画面の上端・下端の帯にあるかを見る。帯の外で動かしても UI は出さない。
+  // ポインタが画面の上端・下端の帯にあるかを見る。帯の外で動かしても UI は出さないが、
+  // 出ている間に動かしたら隠すまでの時間を数え直す。
   // タッチは指を置いた所でスワイプするので、帯に入ったと数えない。
   const onViewerPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === 'touch') return
@@ -154,6 +157,7 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
     const y = event.clientY - rect.top
     const inside = y < UI_EDGE_BAND_PX || y >= rect.height - UI_EDGE_BAND_PX
     if (inside !== ui.edge) dispatch({ type: 'edgeBand', inside })
+    else if (hides) dispatch({ type: 'pointerActive' })
   }
 
   const book = load.status === 'ready' ? load.book : null
@@ -457,29 +461,8 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
     applyZoom(toggleZoomAt(null, anchorAt(event.clientX, event.clientY), content, viewport, zoomBase()))
   }
 
-  // 進捗線のドラッグでシークする。ドラッグ中は行き先のページ番号を出し、離したところへ移る。
-  const [seek, setSeek] = useState<{ index: number; x: number } | null>(null)
-  const seekAt = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect()
-    const x = Math.min(rect.width, Math.max(0, event.clientX - rect.left))
-    return { index: seekSpreadIndex(x / rect.width, spreads.length, binding), x }
-  }
-  const onSeekDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!book || spreads.length === 0 || event.button !== 0) return
-    event.currentTarget.setPointerCapture(event.pointerId)
-    setSeek(seekAt(event))
-  }
-  const onSeekMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (seek) setSeek(seekAt(event))
-  }
-  const onSeekUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!seek) return
-    const target = spreads[seekAt(event).index]
-    setSeek(null)
-    if (target) dispatch({ type: 'seek', page: target.pages[0] })
-  }
-
-  const uiHidden = !ui.visible && !state.finished
+  // 読み終わりの案内は情報バーとは別に出すので、情報バーの表示は UI の状態だけで決める。
+  const uiHidden = !ui.visible
 
   // 前の巻・次の巻を先頭から開く。履歴は置き換え、Esc で本を開いた画面へ 1 回で戻れるようにする。
   const openAdjacent = (target: AdjacentBook) => {
@@ -495,6 +478,7 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
     <div
       className={styles.viewer}
       data-ui={uiHidden ? 'hidden' : 'visible'}
+      data-finished={state.finished ? '' : undefined}
       onPointerMove={onViewerPointerMove}
       onPointerLeave={() => dispatch({ type: 'edgeBand', inside: false })}
     >
@@ -540,35 +524,123 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
         enhancement={book ? enhancement : null}
       />
 
-      <div
-        className={styles.bottomBar}
-        data-binding={binding}
-        onPointerEnter={() => dispatch({ type: 'holdUi', held: true })}
-        onPointerLeave={() => dispatch({ type: 'holdUi', held: false })}
-        onPointerDown={onSeekDown}
-        onPointerMove={onSeekMove}
-        onPointerUp={onSeekUp}
-        onPointerCancel={() => setSeek(null)}
-      >
-        {book && seek ? (
-          <span className={styles.seekLabel} style={{ left: `clamp(3rem, ${seek.x}px, calc(100% - 3rem))` }}>
-            {pageLabel(book, spreads[seek.index], false)}
-          </span>
+      <div className={styles.bottomBar} data-binding={binding}>
+        {book && spreads.length > 0 ? (
+          <PageSlider
+            book={book}
+            spreads={spreads}
+            spreadIndex={spreadIndex}
+            binding={binding}
+            finished={state.finished}
+            dispatch={dispatch}
+          />
         ) : null}
+        {/* 情報バーが隠れている間だけ出す進捗線。表示だけで、ドラッグでは動かさない。 */}
         <ProgressLine
           className={styles.progress}
           label="読書の進み具合"
-          value={
-            spreads.length === 0
-              ? 0
-              : seek
-                ? (seek.index + 1) / spreads.length
-                : state.finished
-                  ? 1
-                  : (spreadIndex + 1) / spreads.length
-          }
+          value={spreads.length === 0 ? 0 : state.finished ? 1 : (spreadIndex + 1) / spreads.length}
         />
       </div>
+    </div>
+  )
+}
+
+// 下端中央のページ移動スライダー。見開き単位で動き、右綴じは右端が先頭。左右の端に現在のページ
+// (見開きなら先のページ)と総ページを出す。つまみのドラッグ中はつまみの上に行き先のページ番号を出し、
+// 離した所の見開きへ移る。フォーカス中は ← / → / Home / End で動かせる。
+function PageSlider({
+  book,
+  spreads,
+  spreadIndex,
+  binding,
+  finished,
+  dispatch,
+}: {
+  book: OpenedBook
+  spreads: readonly Spread[]
+  spreadIndex: number
+  binding: Binding
+  finished: boolean
+  dispatch: (action: ViewerAction) => void
+}) {
+  // ドラッグ中のつまみの位置(スライダーの左端からの割合)。
+  const [drag, setDrag] = useState<{ id: number; ratio: number } | null>(null)
+  const total = book.pages.length
+  const index = Math.max(0, spreadIndex)
+  const current = (spreads[index]?.pages[0] ?? 0) + 1
+  const dragIndex = drag ? sliderIndexAt(drag.ratio, spreads.length, binding) : -1
+  const ratio = drag ? drag.ratio : sliderRatio(index, spreads.length, binding)
+  const ends = sliderEnds(binding, String(current), String(total))
+
+  const ratioAt = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const value = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0
+    return Math.min(1, Math.max(0, value))
+  }
+  const seekTo = (target: number) => {
+    const spread = spreads[target]
+    if (spread) dispatch({ type: 'seek', page: spread.pages[0] })
+  }
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.focus()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDrag({ id: event.pointerId, ratio: ratioAt(event) })
+  }
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!drag || drag.id !== event.pointerId) return
+    setDrag({ id: drag.id, ratio: ratioAt(event) })
+  }
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!drag || drag.id !== event.pointerId) return
+    setDrag(null)
+    seekTo(sliderIndexAt(ratioAt(event), spreads.length, binding))
+  }
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const target = sliderKeyIndex(event.key, index, spreads.length, binding)
+    if (target === null) return
+    // ページ送りのキー(ウィンドウで受ける)と二重に動かさない。
+    event.preventDefault()
+    event.stopPropagation()
+    seekTo(target)
+  }
+
+  return (
+    <div
+      className={styles.slider}
+      onPointerEnter={() => dispatch({ type: 'holdUi', held: true })}
+      onPointerLeave={() => dispatch({ type: 'holdUi', held: false })}
+    >
+      <span className={styles.sliderEnd}>{ends.left}</span>
+      <div
+        className={styles.sliderTrack}
+        role="slider"
+        tabIndex={0}
+        aria-label="ページ移動"
+        aria-orientation="horizontal"
+        aria-valuemin={1}
+        aria-valuemax={total}
+        aria-valuenow={current}
+        aria-valuetext={finished ? `読了 / ${total} ページ` : `${current} / ${total} ページ`}
+        data-seeking={drag ? '' : undefined}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => setDrag(null)}
+        onKeyDown={onKeyDown}
+      >
+        <div className={styles.sliderRail} />
+        <div
+          className={styles.sliderFill}
+          style={binding === 'right' ? { left: `${ratio * 100}%`, right: 0 } : { left: 0, right: `${(1 - ratio) * 100}%` }}
+        />
+        <div className={styles.sliderThumb} style={{ left: `${ratio * 100}%` }}>
+          {drag ? <span className={styles.seekLabel}>{pageLabel(book, spreads[dragIndex], false)}</span> : null}
+        </div>
+      </div>
+      <span className={styles.sliderEnd}>{ends.right}</span>
     </div>
   )
 }

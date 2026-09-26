@@ -74,6 +74,8 @@ export type ViewerAction =
   | { type: 'resized'; width: number; height: number }
   // ポインタが上端・下端の帯に入った・出た。
   | { type: 'edgeBand'; inside: boolean }
+  // 出ている UI の上以外でポインタが動いた(帯の出入りは無い)。隠すまでの時間を数え直す。
+  | { type: 'pointerActive' }
   | { type: 'hideUi' }
   | { type: 'toggleUi' }
   | { type: 'holdUi'; held: boolean }
@@ -166,11 +168,12 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       return paged({ ...state, page: spread.pages[0], finished: false })
     }
     case 'seek': {
+      // スライダーの操作。UI の上での操作なので、出ている UI は出したままにして時間を数え直す。
       if (state.load.status !== 'ready') return state
       const last = state.load.book.pages.length - 1
       if (last < 0) return state
       const page = Math.min(Math.max(0, Math.trunc(action.page)), last)
-      return paged({ ...state, page, finished: false })
+      return touched({ ...state, page, finished: false })
     }
     case 'toggleSpread':
       return touched({ ...state, view: { ...state.view, mode: action.twoPages ? 'single' : 'spread' } })
@@ -199,6 +202,9 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       if (action.inside) return { ...state, ui: { ...state.ui, edge: true, visible: true } }
       // 帯から出たところから、隠すまでの時間を数え始める。
       return { ...state, ui: { ...state.ui, edge: false, activity: state.ui.activity + 1 } }
+    case 'pointerActive':
+      if (!uiHides(state.ui)) return state
+      return { ...state, ui: { ...state.ui, activity: state.ui.activity + 1 } }
     case 'hideUi':
       if (!uiHides(state.ui)) return state
       return { ...state, ui: { ...state.ui, visible: false } }

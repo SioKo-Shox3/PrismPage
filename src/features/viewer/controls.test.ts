@@ -6,7 +6,6 @@ import {
   clickCommand,
   initialWheelGate,
   keyCommand,
-  seekSpreadIndex,
   swipeCommand,
   wheelStep,
   type KeyInput,
@@ -162,25 +161,5 @@ describe('スワイプ', () => {
     expect(swipeCommand(30, 0, 200, 'right')).toBeNull()
     expect(swipeCommand(120, 100, 200, 'right')).toBeNull()
     expect(swipeCommand(120, 0, 2000, 'right')).toBeNull()
-  })
-})
-
-describe('シーク', () => {
-  it('左綴じは左端が先頭、右端が最後', () => {
-    expect(seekSpreadIndex(0, 10, 'left')).toBe(0)
-    expect(seekSpreadIndex(0.55, 10, 'left')).toBe(5)
-    expect(seekSpreadIndex(1, 10, 'left')).toBe(9)
-  })
-
-  it('右綴じは右端が先頭、左端が最後', () => {
-    expect(seekSpreadIndex(1, 10, 'right')).toBe(0)
-    expect(seekSpreadIndex(0, 10, 'right')).toBe(9)
-  })
-
-  it('線の外は端に収め、見開きが無ければ -1', () => {
-    expect(seekSpreadIndex(-0.5, 10, 'left')).toBe(0)
-    expect(seekSpreadIndex(3, 10, 'left')).toBe(9)
-    expect(seekSpreadIndex(Number.NaN, 10, 'left')).toBe(0)
-    expect(seekSpreadIndex(0.5, 0, 'left')).toBe(-1)
   })
 })
