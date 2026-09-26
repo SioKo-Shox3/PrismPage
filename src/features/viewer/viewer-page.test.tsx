@@ -913,6 +913,47 @@ describe('ビューアの全画面', () => {
     expect(win.fullscreen).toBe(true)
   })
 
+  describe('設定で全画面で開かないとき', () => {
+    beforeEach(async () => {
+      const { useSettingsStore } = await import('@/features/settings/settings-store')
+      useSettingsStore.setState({ viewerFullscreen: false })
+    })
+
+    afterEach(async () => {
+      const { useSettingsStore } = await import('@/features/settings/settings-store')
+      useSettingsStore.setState({ viewerFullscreen: true })
+    })
+
+    it('開いても閉じてもウィンドウのまま', async () => {
+      const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+      await settleWindow()
+      expect(win.calls).toEqual([])
+      expect(win.fullscreen).toBe(false)
+
+      fireEvent.keyDown(window, { key: 'Escape' })
+      await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+      await settleWindow()
+      expect(win.calls).toEqual([])
+    })
+
+    it('F / F11 では全画面に切り替えられ、全画面のまま閉じると元のウィンドウに戻す', async () => {
+      const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+      await settleWindow()
+      expect(win.calls).toEqual([])
+
+      fireEvent.keyDown(window, { key: 'f' })
+      await vi.waitFor(() => expect(win.calls).toEqual([true]))
+      fireEvent.keyDown(window, { key: 'F11' })
+      await vi.waitFor(() => expect(win.calls).toEqual([true, false]))
+      fireEvent.keyDown(window, { key: 'F11' })
+      await vi.waitFor(() => expect(win.calls).toEqual([true, false, true]))
+
+      fireEvent.keyDown(window, { key: 'Escape' })
+      await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+      await vi.waitFor(() => expect(win.calls).toEqual([true, false, true, false]))
+    })
+  })
+
   it('次の巻へ移っても全画面のままで、閉じたときに元のウィンドウに戻す', async () => {
     const next = { bookId: 'next000000000000', title: '第3巻', path: 'C:/本/第3巻' }
     saved.adjacent.mockResolvedValue({ previous: null, next })

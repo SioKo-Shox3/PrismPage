@@ -33,8 +33,10 @@ export function SettingsPage() {
     setDefaultCoverSingle,
     setDefaultSpreadMode,
     setTheme,
+    setViewerFullscreen,
     setWheelReversed,
     theme,
+    viewerFullscreen,
     wheelReversed,
   } = useSettingsStore()
   // エンジンの登録が変わったら、AI 超解像の既定値の欄にエンジンの状態を読み直させる。
@@ -64,7 +66,7 @@ export function SettingsPage() {
         </nav>
 
         <div className={styles.sections}>
-          <SettingsSection id="display" lead="テーマと、本を初めて開いたときの見せ方です。">
+          <SettingsSection id="display" lead="テーマと、本を開いたときの見せ方です。">
             <div className="settings-compact-grid">
               <article className="setting-item">
                 <div className="setting-item-header">
@@ -133,6 +135,24 @@ export function SettingsPage() {
                     <option value="single">単独で表示する</option>
                     <option value="paired">次のページと並べる</option>
                   </select>
+                </label>
+              </article>
+
+              <article className="setting-item">
+                <div className="setting-item-header">
+                  <div>
+                    <h3>ビューア</h3>
+                    <p>オフにしても、ビューアで F / F11 を押すと全画面とウィンドウを切り替えられます。</p>
+                  </div>
+                </div>
+
+                <label className={styles.toggle}>
+                  <input
+                    type="checkbox"
+                    checked={viewerFullscreen}
+                    onChange={(event) => setViewerFullscreen(event.target.checked)}
+                  />
+                  ビューアを全画面で開く
                 </label>
               </article>
             </div>
