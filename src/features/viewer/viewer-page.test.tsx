@@ -664,12 +664,49 @@ describe('前の巻・次の巻', () => {
     await vi.waitFor(() => expect(saved.open).toHaveBeenLastCalledWith(previous.path, { fromStart: true }))
   })
 
-  it('次の巻が無い本は、読み終わりの案内にその旨を出す', async () => {
+})
+
+describe('読み終わりの案内', () => {
+  const folder = '/folders?source=1&path=%E6%BC%AB%E7%94%BB'
+
+  // 最後の見開きから開き、次へ送って案内を出す(右綴じなので ← が次)。
+  async function renderFinished(entries?: string[]) {
     openedBook = { ...book, startIndex: 4 }
-    await renderViewer('5 / 5')
+    const rendered = await renderViewer('5 / 5', entries)
     fireEvent.keyDown(window, { key: 'ArrowLeft' })
-    expect(screen.getByText('次の巻の情報はありません。')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '読み終わりました' })).toBeTruthy()
+    return rendered
+  }
+
+  it('次の巻が無い本は、書名と「次の巻はありません」だけを添え、最初から読む・閉じるを出す', async () => {
+    await renderFinished()
+    const panel = screen.getByRole('region', { name: '読み終わりました' })
+    expect(panel.textContent).toContain('テストの本')
+    expect(screen.getByText('次の巻はありません')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /次の巻を読む/ })).toBeNull()
+    expect(screen.getByRole('button', { name: '最初から読む' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '閉じる' })).toBeTruthy()
+  })
+
+  it('最初から読むを選ぶと、この本の最初の見開きへ戻って案内を閉じる', async () => {
+    await renderFinished()
+    fireEvent.click(screen.getByRole('button', { name: '最初から読む' }))
+    expect(screen.getByText('1 / 5')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '読み終わりました' })).toBeNull()
+  })
+
+  it('閉じるを選ぶと、Esc と同じくビューアを閉じて本を開いたフォルダの画面へ戻る', async () => {
+    const { router } = await renderFinished([folder, `/viewer/${book.bookId}`])
+    fireEvent.click(screen.getByRole('button', { name: '閉じる' }))
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+    expect(router.state.location.search).toEqual({ source: 1, path: '漫画' })
+  })
+
+  it('案内から前へ送ると最後の見開きに戻る', async () => {
+    await renderFinished()
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    expect(screen.getByText('5 / 5')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '読み終わりました' })).toBeNull()
   })
 })
 

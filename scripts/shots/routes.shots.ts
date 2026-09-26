@@ -77,6 +77,29 @@ for (const theme of themes) {
   })
 }
 
+// 最後の見開きの次に出す読み終わりの案内。End で最後の見開きへ動き、PageDown で次へ送る。
+for (const theme of themes) {
+  test(`${theme.name} viewer-finished`, async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    await page.emulateMedia({ colorScheme: theme.colorScheme })
+
+    await page.goto('/viewer/sample-manga')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme.name)
+    await expect(page.getByRole('slider', { name: 'ページ移動' })).toHaveCount(1)
+    await page.waitForFunction('document.fonts.status === "loaded"')
+
+    await page.keyboard.press('End')
+    await page.keyboard.press('PageDown')
+    await expect(page.getByRole('heading', { name: '読み終わりました' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '最初から読む' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '閉じる' })).toBeVisible()
+
+    await page.screenshot({ path: path.join(shotsDir, `${theme.name}-viewer-finished.png`) })
+    expect(pageErrors).toEqual([])
+  })
+}
+
 test('モックのサンプルの本と合成ページ画像が配信される', async ({ request }) => {
   const library = await request.get('/mock/library.json')
   expect(library.ok()).toBe(true)

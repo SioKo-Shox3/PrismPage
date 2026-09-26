@@ -277,6 +277,15 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
   const wheelReversed = useSettingsStore((settings) => settings.wheelReversed)
   const navigate = useNavigate()
   const router = useRouter()
+  // ビューアを閉じて本を開いた画面(フォルダなど)へ戻る。戻る先が無い(起動直後にビューアから
+  // 始まった)ときは読みかけへ。
+  const closeViewer = useCallback(() => {
+    if (router.history.canGoBack()) {
+      router.history.back()
+    } else {
+      void navigate({ to: '/' })
+    }
+  }, [router, navigate])
   const twoPages = usesTwoPages(state.view.mode, aspect)
 
   // キー・クリック・ホイール・スワイプで決まった動作を実行する。
@@ -321,19 +330,16 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
           applyZoom(null)
           return
         case 'escape':
-          // 全画面なら解除し、そうでなければビューアを閉じて本を開いた画面(フォルダなど)へ戻る。
-          // 戻る先が無い(起動直後にビューアから始まった)ときは読みかけへ。
+          // 全画面なら解除し、そうでなければビューアを閉じる。
           if (document.fullscreenElement) {
             void document.exitFullscreen().catch(() => {})
-          } else if (router.history.canGoBack()) {
-            router.history.back()
           } else {
-            void navigate({ to: '/' })
+            closeViewer()
           }
           return
       }
     },
-    [spreads, twoPages, navigate, router, applyZoom, zoom, content, viewport, zoomBase],
+    [spreads, twoPages, closeViewer, applyZoom, zoom, content, viewport, zoomBase],
   )
 
   useEffect(() => {
@@ -509,7 +515,8 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
           book={book}
           next={adjacent?.next ?? null}
           onOpen={openAdjacent}
-          onBack={() => dispatch({ type: 'prev', spreads })}
+          onRestart={() => dispatch({ type: 'first', spreads })}
+          onClose={closeViewer}
         />
       ) : null}
 
@@ -896,16 +903,19 @@ function batchActions(enhancement: {
   ]
 }
 
+// 最後の見開きの次に出す読み終わりの案内。次の巻(あるときだけ)・この本の最初から・閉じる(Esc と同じ)を選べる。
 function FinishedPanel({
   book,
   next,
   onOpen,
-  onBack,
+  onRestart,
+  onClose,
 }: {
   book: OpenedBook
   next: AdjacentBook | null
   onOpen: (target: AdjacentBook) => void
-  onBack: () => void
+  onRestart: () => void
+  onClose: () => void
 }) {
   return (
     <section className={styles.finished} aria-labelledby="viewer-finished-heading">
@@ -923,19 +933,13 @@ function FinishedPanel({
             </span>
           </button>
         ) : (
-          <section className={styles.nextVolume} aria-label="次の巻">
-            <div className={styles.nextCover} aria-hidden="true" />
-            <div>
-              <p className={styles.nextLabel}>次の巻</p>
-              <p className={styles.nextNote}>次の巻の情報はありません。</p>
-            </div>
-          </section>
+          <p className={styles.nextNote}>次の巻はありません</p>
         )}
         <div className={styles.finishedActions}>
-          <Button onClick={onBack}>最後のページに戻る</Button>
-          <Link to="/" className={styles.finishedLink}>
-            読みかけへ戻る
-          </Link>
+          <Button onClick={onRestart}>最初から読む</Button>
+          <Button variant="ghost" onClick={onClose}>
+            閉じる
+          </Button>
         </div>
       </div>
     </section>

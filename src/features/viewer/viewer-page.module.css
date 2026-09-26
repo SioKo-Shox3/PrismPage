@@ -416,11 +416,6 @@
   gap: var(--space-3);
 }
 
-.finishedLink {
-  color: var(--color-accent);
-  font-size: var(--font-size-sm);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .topBar,
   .slider,
