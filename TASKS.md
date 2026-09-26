@@ -443,7 +443,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - notes: V-08 のスクリーンショット(`.harness/shots/paper-viewer-bar.png`・`ink-viewer-bar.png`)で、半透明の下地にページ下端の文字が透け、両端の数字が薄く小さかった。
 
 ## V-09: 「読み終わりました」の案内の文言とボタンを見直す
-- status: todo
+- status: done
 - done-when: 本として開いた本で最後の見開きの次に出す案内が、見出し「読み終わりました」・書名と、ボタン「次の巻を読む」(次の巻があるときだけ。先頭から開く)・「最初から読む」(この本の最初の見開きへ)・「閉じる」(ビューアを閉じて開いた元の画面へ戻る。Esc と同じ)を持つ。次の巻が無いときは「次の巻はありません」とだけ添える。案内から前へ送ると最後の見開きに戻る(今と同じ)。各ボタンの動きのテストがある。紙・墨の `run shots` で案内の画面を開いて見ている。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
