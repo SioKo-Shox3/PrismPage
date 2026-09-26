@@ -486,7 +486,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 # MS10 ビューアの全画面(0.2.3 の実機確認から)
 
 ## V-12: ビューアを Tauri のウィンドウの全画面で開き、Esc 1 回で閉じて元のウィンドウに戻す
-- status: todo
+- status: done
 - done-when: ビューアの全画面を DOM の Fullscreen API ではなく Tauri のウィンドウの全画面(`getCurrentWindow().setFullscreen` と `isFullscreen`)で行う。`src-tauri/capabilities/default.json` に `core:window:allow-set-fullscreen` と `core:window:allow-is-fullscreen` を足し、呼び出しは `src/lib/` のラッパーにまとめてモック(ブラウザ)では何もしないか DOM の全画面に落とす。ビューアを開くとウィンドウを全画面にし(開く前から全画面なら何もしない)、閉じる(Esc・戻る・左上の戻る・読み終わりの「閉じる」)ときは、ビューアが全画面にしたときだけ元のウィンドウに戻す。F / F11 は全画面とウィンドウを切り替え、F / F11 でウィンドウに戻したあとに閉じても何もしない。Esc は 1 回でビューアを閉じる(全画面を抜けるだけの段は無くす)。次の巻・前の巻へ移るときは全画面のまま。全画面にするかどうかは、V-13 で足す設定を読むまでは常にする(V-13 の後は設定に従う)。ラッパーの呼び出し順(開く→全画面、閉じる→戻す、F で戻した後に閉じる→戻さない、開く前から全画面→閉じても戻さない、巻の移動→戻さない)をモックで確かめるテストがある。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`

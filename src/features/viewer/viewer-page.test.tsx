@@ -16,6 +16,18 @@ const saved = vi.hoisted(() => ({
   close: vi.fn<(bookIds: string[]) => Promise<void>>(() => Promise.resolve()),
 }))
 
+// ウィンドウの全画面のラッパーの代わり。呼び出しの順を `calls` に残す。
+const win = vi.hoisted(() => ({ fullscreen: false, calls: [] as boolean[] }))
+
+vi.mock('@/lib/window-fullscreen', () => ({
+  isWindowFullscreen: () => Promise.resolve(win.fullscreen),
+  setWindowFullscreen: (fullscreen: boolean) => {
+    win.calls.push(fullscreen)
+    win.fullscreen = fullscreen
+    return Promise.resolve()
+  },
+}))
+
 const book: OpenedBook = {
   bookId: '0123456789abcdef',
   title: 'テストの本',
@@ -70,6 +82,8 @@ let openedBook: OpenedBook = book
 
 beforeEach(() => {
   openedBook = book
+  win.fullscreen = false
+  win.calls.length = 0
   saved.position.mockReset().mockImplementation(() => Promise.resolve())
   saved.view.mockReset().mockImplementation(() => Promise.resolve())
   saved.open.mockReset().mockImplementation(() => Promise.resolve(openedBook))
@@ -77,9 +91,16 @@ beforeEach(() => {
   saved.close.mockReset().mockImplementation(() => Promise.resolve())
 })
 
-afterEach(() => {
+// 積んだウィンドウの操作(閉じた後の戻しを含む)が済むまで待つ。
+function settleWindow() {
+  return act(() => new Promise<void>((resolve) => window.setTimeout(resolve, 0)))
+}
+
+afterEach(async () => {
   cleanup()
   vi.useRealTimers()
+  // 閉じた後の戻しを次のテストへ持ち越さない。
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
 })
 
 async function renderViewer(firstLabel = '1 / 5', entries = [`/viewer/${book.bookId}`]) {
@@ -830,5 +851,84 @@ describe('長い本', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('ビューアの全画面', () => {
+  const folder = '/folders?source=1&path=%E6%BC%AB%E7%94%BB'
+
+  it('開くとウィンドウを全画面にし、Esc 1 回で閉じて元のウィンドウに戻す', async () => {
+    const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+    await vi.waitFor(() => expect(win.calls).toEqual([true]))
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false]))
+  })
+
+  it('左上の戻るで閉じても元のウィンドウに戻す', async () => {
+    const { router } = await renderViewer()
+    await vi.waitFor(() => expect(win.calls).toEqual([true]))
+
+    fireEvent.click(screen.getByRole('link', { name: '戻る' }))
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/'))
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false]))
+  })
+
+  it('F でウィンドウに戻した後に閉じても、ウィンドウの状態を変えない', async () => {
+    const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+    await vi.waitFor(() => expect(win.calls).toEqual([true]))
+
+    fireEvent.keyDown(window, { key: 'f' })
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false]))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+    await settleWindow()
+    expect(win.calls).toEqual([true, false])
+  })
+
+  it('F11 で全画面に戻したら、閉じるときに元のウィンドウに戻す', async () => {
+    const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+    await vi.waitFor(() => expect(win.calls).toEqual([true]))
+
+    fireEvent.keyDown(window, { key: 'F11' })
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false]))
+    fireEvent.keyDown(window, { key: 'F11' })
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false, true]))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false, true, false]))
+  })
+
+  it('開く前から全画面なら、開いても閉じてもウィンドウの状態を変えない', async () => {
+    win.fullscreen = true
+    const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+    await settleWindow()
+    expect(win.calls).toEqual([])
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+    await settleWindow()
+    expect(win.calls).toEqual([])
+    expect(win.fullscreen).toBe(true)
+  })
+
+  it('次の巻へ移っても全画面のままで、閉じたときに元のウィンドウに戻す', async () => {
+    const next = { bookId: 'next000000000000', title: '第3巻', path: 'C:/本/第3巻' }
+    saved.adjacent.mockResolvedValue({ previous: null, next })
+    const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+    const toNext = screen.getByRole('button', { name: '次の巻' }) as HTMLButtonElement
+    await vi.waitFor(() => expect(toNext.disabled).toBe(false))
+    await vi.waitFor(() => expect(win.calls).toEqual([true]))
+
+    openedBook = { ...book, bookId: next.bookId, title: next.title }
+    fireEvent.click(toNext)
+    await screen.findByRole('heading', { name: '第3巻' })
+    await settleWindow()
+    expect(win.calls).toEqual([true])
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false]))
   })
 })

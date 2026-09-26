@@ -16,6 +16,7 @@ import { getAdjacentBooks, isPdfPath, openBook, pageUrl, pdfPageWidth } from '@/
 import type { AdjacentBook, AdjacentBooks, OpenedBook } from '@/types/app'
 
 import { releaseBooks, startBookRequest } from './book-holds'
+import { holdViewerFullscreen, toggleViewerFullscreen } from './fullscreen-session'
 import {
   clickCommand,
   initialWheelGate,
@@ -65,6 +66,10 @@ export function ViewerPage() {
   const { path, start } = useSearch({ from: '/viewer/$bookId' })
   const source = path ?? bookId
   const fromStart = start === 'first'
+
+  // ビューアを開いている間はウィンドウを全画面にする。次の巻・前の巻へ移ってもこの画面は残るので、
+  // 全画面のまま。閉じる(Esc・戻る・読み終わりの「閉じる」)と、全画面にしたのがビューアなら元に戻す。
+  useEffect(() => holdViewerFullscreen(), [])
 
   // 別の本へ移ったら状態を作り直す。
   return <Viewer key={`${source}
@@ -311,7 +316,7 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
           dispatch({ type: 'toggleUi' })
           return
         case 'fullscreen':
-          toggleFullscreen()
+          toggleViewerFullscreen()
           return
         case 'zoomIn':
         case 'zoomOut':
@@ -330,12 +335,8 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
           applyZoom(null)
           return
         case 'escape':
-          // 全画面なら解除し、そうでなければビューアを閉じる。
-          if (document.fullscreenElement) {
-            void document.exitFullscreen().catch(() => {})
-          } else {
-            closeViewer()
-          }
+          // 1 回で閉じる。全画面を戻すのは画面を離れたときの後始末(`holdViewerFullscreen`)に任せる。
+          closeViewer()
           return
       }
     },
@@ -976,12 +977,4 @@ function setScrollTop(element: HTMLElement, top: number) {
 function canScrollFurther(element: HTMLElement, deltaY: number): boolean {
   if (deltaY > 0) return element.scrollTop + element.clientHeight < element.scrollHeight - 1
   return element.scrollTop > 0
-}
-
-function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    void document.exitFullscreen().catch(() => {})
-  } else {
-    void document.documentElement.requestFullscreen().catch(() => {})
-  }
 }
