@@ -433,6 +433,15 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - paths: src/features/viewer/**, src/design/**, scripts/shots/**
 - notes: ユーザー決定(2026-09-26)。手本は TsubameViewer の下端中央のスライダー。行き先の縮小画像は出さない。
 
+## V-08b: スライダーの下地を不透明にし、両端のページ番号を読みやすくする
+- status: todo
+- done-when: スライダーの下地が上端の情報バーと同じ不透明な面(トークンの色)になり、下のページの文字や絵が透けない。両端の現在のページ・総ページの数字が本文と同じ文字サイズ以上で、紙・墨の両テーマで背景との対比が 4.5:1 以上ある(色はトークンだけで描く)。紙・墨の `viewer-bar` のスクリーンショットを開き、ページ下端の文字がスライダーに透けていないこと、数字が読めることを確かめている。
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run shots`
+- paths: src/features/viewer/**, src/design/**
+- notes: V-08 のスクリーンショット(`.harness/shots/paper-viewer-bar.png`・`ink-viewer-bar.png`)で、半透明の下地にページ下端の文字が透け、両端の数字が薄く小さかった。
+
 ## V-09: 「読み終わりました」の案内の文言とボタンを見直す
 - status: todo
 - done-when: 本として開いた本で最後の見開きの次に出す案内が、見出し「読み終わりました」・書名と、ボタン「次の巻を読む」(次の巻があるときだけ。先頭から開く)・「最初から読む」(この本の最初の見開きへ)・「閉じる」(ビューアを閉じて開いた元の画面へ戻る。Esc と同じ)を持つ。次の巻が無いときは「次の巻はありません」とだけ添える。案内から前へ送ると最後の見開きに戻る(今と同じ)。各ボタンの動きのテストがある。紙・墨の `run shots` で案内の画面を開いて見ている。
