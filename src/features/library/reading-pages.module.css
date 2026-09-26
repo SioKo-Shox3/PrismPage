@@ -1,0 +1,371 @@
+/* 読みかけ(ホーム)と履歴の画面。色・余白・書体はすべて tokens.css の変数で描く。 */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-8) var(--space-10) var(--space-12);
+}
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--rule-width) solid var(--color-rule);
+}
+
+.header button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  line-height: var(--line-height-tight);
+  color: var(--color-text);
+}
+
+.lead {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.message {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-10) var(--space-6);
+  border: var(--rule-width) dashed var(--color-rule-strong);
+  border-radius: var(--radius-lg);
+  color: var(--color-text);
+  text-align: center;
+}
+
+.empty p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.muted a {
+  color: var(--color-accent);
+}
+
+/* 表紙(仮の面の上にサムネイルを重ねる) */
+
+.cover {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  width: 100%;
+  aspect-ratio: 1 / 1.414;
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  box-shadow: var(--shadow-sm);
+}
+
+.coverIcon {
+  color: var(--color-rule-strong);
+}
+
+.coverFormat {
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+
+/* 巻・形式・フォルダ */
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.volume {
+  font-family: var(--font-heading);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.folder {
+  overflow: hidden;
+  max-width: 24em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder::before {
+  content: '';
+  display: inline-block;
+  width: 1em;
+  height: var(--rule-width);
+  margin-right: var(--space-2);
+  vertical-align: middle;
+  background: var(--color-rule-strong);
+}
+
+.missing {
+  flex-shrink: 0;
+}
+
+.lastRead {
+  color: var(--color-text-muted);
+}
+
+/* 読みかけ */
+
+.readingList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--space-5) var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readingItem {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  padding-bottom: var(--space-5);
+  border-bottom: var(--rule-width) solid var(--color-rule);
+}
+
+/* 最後に読んだ本は大きく、1 行を占める。 */
+.featured {
+  grid-column: 1 / -1;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: var(--space-8);
+  padding: var(--space-6);
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.coverButton {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.coverButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.readingBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.featured .readingBody {
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.12em;
+  color: var(--color-accent);
+}
+
+.bookTitle {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  line-height: var(--line-height-tight);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.featured .bookTitle {
+  font-size: var(--font-size-2xl);
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 28rem;
+}
+
+.progressLine {
+  width: 100%;
+}
+
+.position {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+.actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 履歴 */
+
+.day {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dayLabel {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-md);
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.historyList {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--rule-width) solid var(--color-rule);
+}
+
+.historyItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-right: var(--space-2);
+  border-bottom: var(--rule-width) solid var(--color-rule);
+}
+
+.historyOpen {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.historyOpen:hover:not(:disabled) {
+  background: var(--color-surface-sunken);
+}
+
+.historyOpen:disabled {
+  cursor: default;
+  color: var(--color-text-muted);
+}
+
+.historyOpen:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.historyCover {
+  flex-shrink: 0;
+  width: 40px;
+}
+
+.historyCover .coverIcon,
+.historyCover .coverFormat {
+  display: none;
+}
+
+.historyBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.historyTitle {
+  overflow: hidden;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyMeta {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: var(--space-6) var(--space-4) var(--space-10);
+  }
+
+  .featured {
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: var(--space-4);
+    padding: var(--space-4);
+  }
+
+  .historyMeta .lastRead {
+    display: none;
+  }
+}

@@ -42,8 +42,14 @@ jobs:
       - name: Lint
         run: node "$env:ProgramFiles\nodejs\node_modules\npm\bin\npm-cli.js" run lint
 
+      - name: Test frontend
+        run: node "$env:ProgramFiles\nodejs\node_modules\npm\bin\npm-cli.js" run test
+
       - name: Build frontend
         run: node "$env:ProgramFiles\nodejs\node_modules\npm\bin\npm-cli.js" run build
 
       - name: Check Rust
         run: cargo check --manifest-path src-tauri\Cargo.toml
+
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri\Cargo.toml

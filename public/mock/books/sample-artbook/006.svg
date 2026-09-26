@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(285,55%,78%)"/><stop offset="1" stop-color="hsl(5,50%,38%)"/></linearGradient></defs>
+<rect width="1600" height="1200" fill="url(#bg)"/>
+<circle cx="840.7" cy="259.2" r="314.8" fill="hsl(285,65%,60%)" opacity="0.55"/>
+<circle cx="40.0" cy="775.9" r="148.9" fill="hsl(325,65%,60%)" opacity="0.55"/>
+<circle cx="122.7" cy="720.0" r="319.1" fill="hsl(5,65%,60%)" opacity="0.55"/>
+<circle cx="507.4" cy="366.4" r="226.3" fill="hsl(45,65%,60%)" opacity="0.55"/>
+<circle cx="816.9" cy="532.8" r="231.6" fill="hsl(85,65%,60%)" opacity="0.55"/>
+<circle cx="213.8" cy="1190.3" r="68.4" fill="hsl(125,65%,60%)" opacity="0.55"/>
+<circle cx="301.2" cy="280.7" r="167.8" fill="hsl(165,65%,60%)" opacity="0.55"/>
+<text x="800" y="1152" font-family="sans-serif" font-size="28" fill="#ffffff" text-anchor="middle">色見本帳 — 6 / 6</text>
+</svg>

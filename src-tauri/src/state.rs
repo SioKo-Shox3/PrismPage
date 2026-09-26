@@ -1,15 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::process::Child;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
-pub struct OpenedEpubPaths(pub Mutex<Vec<String>>);
-
-impl Default for OpenedEpubPaths {
-    fn default() -> Self {
-        Self(Mutex::new(Vec::new()))
-    }
-}
+use crate::services::store::ItemKind;
 
 pub struct RegistryLock(pub Mutex<()>);
 
@@ -19,35 +12,35 @@ impl Default for RegistryLock {
     }
 }
 
-pub struct EnhancementLock(pub Mutex<()>);
+/// 開いた本の ID から、データベースの本の行(`items.id`)を引く表。`open_book` が登録する。
+#[derive(Default)]
+pub struct BookItems(Mutex<HashMap<String, i64>>);
 
-impl Default for EnhancementLock {
-    fn default() -> Self {
-        Self(Mutex::new(()))
+impl BookItems {
+    pub fn insert(&self, book_id: String, item_id: i64) {
+        self.lock().insert(book_id, item_id);
+    }
+
+    pub fn lock(&self) -> MutexGuard<'_, HashMap<String, i64>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
-#[derive(Clone)]
-pub struct RunningEnhancementJob {
-    pub reader_session_id: String,
-    pub child: Arc<Mutex<Option<Child>>>,
-    pub canceled: Arc<AtomicBool>,
-}
+/// 開いた本の ID から、本の場所(正規化した絶対パス)と種類を引く表。`open_book` が登録し、
+/// 前の巻・次の巻を求めるときに使う。
+#[derive(Default)]
+pub struct BookRoots(Mutex<HashMap<String, (PathBuf, ItemKind)>>);
 
-pub struct EnhancementJobState {
-    pub running: HashMap<String, RunningEnhancementJob>,
-    pub canceled_sessions: HashSet<String>,
-    pub canceled_session_order: VecDeque<String>,
-}
+impl BookRoots {
+    pub fn insert(&self, book_id: String, root: PathBuf, kind: ItemKind) {
+        self.lock().insert(book_id, (root, kind));
+    }
 
-pub struct EnhancementJobs(pub Mutex<EnhancementJobState>);
-
-impl Default for EnhancementJobs {
-    fn default() -> Self {
-        Self(Mutex::new(EnhancementJobState {
-            running: HashMap::new(),
-            canceled_sessions: HashSet::new(),
-            canceled_session_order: VecDeque::new(),
-        }))
+    pub fn lock(&self) -> MutexGuard<'_, HashMap<String, (PathBuf, ItemKind)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }

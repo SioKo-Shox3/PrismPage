@@ -1,0 +1,61 @@
+import path from 'node:path'
+import { expect, test } from '@playwright/test'
+
+// 全ルートを「紙」「墨」の両テーマで撮る。テーマは設定の既定値「システムに合わせる」を
+// prefers-color-scheme の擬似で切り替えて決める(light → 紙、dark → 墨)。
+
+const shotsDir = path.resolve('.harness', 'shots')
+
+const routes = [
+  { name: 'continue-reading', path: '/', withNav: true },
+  { name: 'shelves', path: '/shelves', withNav: true },
+  { name: 'folders', path: '/folders', withNav: true },
+  { name: 'favorites', path: '/favorites', withNav: true },
+  { name: 'history', path: '/history', withNav: true },
+  { name: 'settings', path: '/settings', withNav: true },
+  // ビューアは全画面表示で左ナビを出さない。
+  { name: 'viewer', path: '/viewer/sample-manga', withNav: false },
+]
+
+const themes = [
+  { name: 'paper', colorScheme: 'light' },
+  { name: 'ink', colorScheme: 'dark' },
+] as const
+
+for (const theme of themes) {
+  test.describe(theme.name, () => {
+    test.use({ colorScheme: theme.colorScheme })
+
+    for (const route of routes) {
+      test(route.name, async ({ page }) => {
+        const pageErrors: string[] = []
+        page.on('pageerror', (error) => pageErrors.push(error.message))
+
+        await page.goto(route.path)
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme.name)
+        await expect(page.getByRole('navigation', { name: 'アプリケーションナビゲーション' })).toHaveCount(
+          route.withNav ? 1 : 0,
+        )
+        await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+        await page.waitForFunction('document.fonts.status === "loaded"')
+
+        await page.screenshot({
+          path: path.join(shotsDir, `${theme.name}-${route.name}.png`),
+          fullPage: true,
+        })
+        expect(pageErrors).toEqual([])
+      })
+    }
+  })
+}
+
+test('モックのサンプルの本と合成ページ画像が配信される', async ({ request }) => {
+  const library = await request.get('/mock/library.json')
+  expect(library.ok()).toBe(true)
+  const body = (await library.json()) as { books: Array<{ pages: string[] }> }
+  expect(body.books.length).toBeGreaterThan(0)
+
+  const firstPage = await request.get(body.books[0].pages[0])
+  expect(firstPage.ok()).toBe(true)
+  expect(firstPage.headers()['content-type']).toContain('image/svg+xml')
+})

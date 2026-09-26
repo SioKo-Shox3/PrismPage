@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PrismPage">
+  <defs>
+    <linearGradient id="page-left" x1="10" y1="16" x2="31" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#d9e5ff"/>
+    </linearGradient>
+    <linearGradient id="page-right" x1="33" y1="16" x2="54" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dff6f0"/>
+    </linearGradient>
+    <linearGradient id="prism" x1="20" y1="14" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="0.48" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#121722"/>
+  <path d="M12 18c8.4 0 14 1.7 20 5.6v27.1c-5.6-3.7-11.5-5.4-20-5.4V18Z" fill="url(#page-left)"/>
+  <path d="M52 18c-8.4 0-14 1.7-20 5.6v27.1c5.6-3.7 11.5-5.4 20-5.4V18Z" fill="url(#page-right)"/>
+  <path d="M32 23.6v27.1" stroke="#6b7280" stroke-width="2" stroke-linecap="round"/>
+  <path d="M32 14 47 43H17L32 14Z" fill="url(#prism)" opacity="0.95"/>
+  <path d="M32 14 39.6 43H17L32 14Z" fill="#ffffff" opacity="0.28"/>
+  <path d="M32 14 47 43H32V14Z" fill="#111827" opacity="0.16"/>
+  <path d="M18 51c5.6.2 9.7 1.2 14 3 4.3-1.8 8.4-2.8 14-3" stroke="#7dd3fc" stroke-width="3" stroke-linecap="round"/>
+</svg>

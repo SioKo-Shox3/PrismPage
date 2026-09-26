@@ -1,0 +1,192 @@
+/* フォルダ画面の検索欄と検索結果。色・余白・書体はすべて tokens.css の変数で描く。 */
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 18rem;
+  max-width: 32rem;
+}
+
+.icon {
+  position: absolute;
+  left: var(--space-3);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.input {
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3) 0 calc(var(--space-3) * 2 + 16px);
+  border: var(--rule-width) solid var(--color-rule-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  transition: border-color var(--duration-fast) var(--easing-standard);
+}
+
+.input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.input:hover {
+  border-color: var(--color-text-muted);
+}
+
+.input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-focus);
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.toggle input {
+  accent-color: var(--color-accent);
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.status {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.message {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--rule-width) solid var(--color-rule);
+}
+
+.list li {
+  border-bottom: var(--rule-width) solid var(--color-rule);
+}
+
+.hit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-3) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--easing-standard);
+}
+
+.hit:hover {
+  background: var(--color-surface-sunken);
+}
+
+.hit:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.hit:disabled {
+  cursor: not-allowed;
+  color: var(--color-text-muted);
+}
+
+.cover,
+.folderMark {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.5rem;
+  aspect-ratio: 1 / 1.414;
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+}
+
+.folderMark {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-accent);
+}
+
+.coverIcon {
+  color: var(--color-rule-strong);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place {
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input,
+  .hit {
+    transition: none;
+  }
+}

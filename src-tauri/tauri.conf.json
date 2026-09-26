@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "PrismPage",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "identifier": "com.sioko.prismpage",
   "build": {
     "frontendDist": "../dist",
@@ -22,19 +22,29 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost",
+        "img-src": "'self' prism: http://prism.localhost",
+        "style-src": "'self'",
+        "font-src": "'self' data:",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'"
+      }
     }
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": [
       "nsis"
     ],
     "copyright": "SioKo-Shox3",
     "category": "Reference",
-    "shortDescription": "画像重視の EPUB ビューワー",
-    "longDescription": "PrismPage は漫画、画集、スキャン系 EPUB に向けた画像重視のデスクトップ EPUB ビューワーです。",
+    "shortDescription": "画像重視の漫画・画集ビューワー",
+    "longDescription": "PrismPage は漫画・画集・スキャン本を、画像ファイル・画像フォルダ・ZIP/CBZ・RAR/CBR・画像中心の EPUB・PDF から開いて読む、画像重視のデスクトップビューワーです。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,20 +52,19 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "fileAssociations": [
-      {
-        "ext": [
-          "epub"
-        ],
-        "name": "EPUB 電子書籍",
-        "description": "EPUB 電子書籍",
-        "mimeType": "application/epub+zip",
-        "role": "Viewer"
-      }
-    ],
+    "resources": {
+      "pdfium/pdfium.dll": "pdfium/pdfium.dll",
+      "pdfium/LICENSE": "pdfium/LICENSE",
+      "pdfium/NOTICE.txt": "pdfium/NOTICE.txt",
+      "pdfium/VERSION": "pdfium/VERSION",
+      "pdfium/licenses/*": "pdfium/licenses/",
+      "../README.md": "README.md",
+      "../LICENSE": "LICENSE"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",
+        "installerHooks": "./windows/hooks.nsh",
         "languages": [
           "Japanese",
           "English"

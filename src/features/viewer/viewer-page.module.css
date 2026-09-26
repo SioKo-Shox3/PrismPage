@@ -1,0 +1,339 @@
+/* ビューア: 紙色(墨色)の地を全画面に敷き、中央に見開き、上端に文字のバー、下端に細い進捗線 */
+.viewer {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.viewer[data-ui='hidden'] {
+  cursor: none;
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+  /* 横方向のスワイプはページ送りに使い、縦方向のスクロールだけをブラウザに任せる */
+  touch-action: pan-y;
+}
+
+/* 幅に合わせるときは縦にスクロールする。スクロールバーの有無で幅が変わらないよう溝を常に取る */
+.stage[data-fit='width'] {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.spread {
+  display: flex;
+  margin: auto;
+  box-shadow: var(--shadow-md);
+}
+
+/* 拡大中はスクロールを使わず、見開きを中心から transform でずらして置く。ドラッグで動かせることを手の形で示す */
+.stage[data-zoomed] {
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+.stage[data-zoomed]:active {
+  cursor: grabbing;
+}
+
+.spread[data-zoomed] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  /* 中心に置く絶対配置の箱は残りの幅(表示領域の半分)に縮もうとするので、ページの大きさそのままにする */
+  width: max-content;
+  margin: 0;
+}
+
+.page {
+  display: block;
+  user-select: none;
+}
+
+.blank {
+  flex: none;
+}
+
+.status {
+  margin: auto;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.topBar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-height-md);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--rule-width) solid var(--color-rule);
+  background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+  transition: opacity var(--duration-normal) var(--easing-standard);
+}
+
+.bottomBar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-1);
+  cursor: pointer;
+  touch-action: none;
+  transition: opacity var(--duration-normal) var(--easing-standard);
+}
+
+/* 右綴じは右から左へ読み進むので、進捗線も右から伸ばす */
+.bottomBar[data-binding='right'] .progress {
+  transform: scaleX(-1);
+}
+
+/* シーク中は線を太らせ、行き先のページ番号を線の上に出す */
+.bottomBar[data-seeking] .progress {
+  height: 4px;
+}
+
+.seekLabel {
+  position: absolute;
+  bottom: calc(100% - var(--space-2));
+  padding: var(--space-1) var(--space-2);
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.viewer[data-ui='hidden'] .topBar,
+.viewer[data-ui='hidden'] .bottomBar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.back {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+}
+
+.back:hover {
+  background: var(--color-surface-sunken);
+}
+
+.back:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.title {
+  overflow: hidden;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-md);
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pageNumber {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* AI 超解像の状態。狭いときは先読みの文言から省く */
+.aiStatus {
+  display: inline-flex;
+  overflow: hidden;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.aiStatus[data-tone='error'] {
+  color: var(--color-danger);
+}
+
+.aiCurrent {
+  flex: none;
+  color: var(--color-accent);
+}
+
+.aiBatch {
+  flex: none;
+}
+
+.aiBatch[data-tone='error'] {
+  color: var(--color-danger);
+}
+
+.aiAhead {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.aiLink {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.aiLink:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.volumeGroup {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+}
+
+.fitGroup {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.finished {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.finishedCard {
+  display: grid;
+  gap: var(--space-4);
+  width: min(100%, 420px);
+  padding: var(--space-8);
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.finishedHeading {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+}
+
+.finishedTitle {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.nextVolume {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  border: var(--rule-width) dashed var(--color-rule-strong);
+  border-radius: var(--radius-md);
+}
+
+/* 次の巻があるときは、表紙と書名を並べたカード全体が押せるボタンになる。 */
+.nextVolume[data-available] {
+  width: 100%;
+  border-style: solid;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nextVolume[data-available]:hover {
+  border-color: var(--color-accent);
+}
+
+.nextVolume[data-available]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.nextCover {
+  flex: none;
+  width: 48px;
+  height: 68px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  object-fit: cover;
+}
+
+.nextText {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.nextBookTitle {
+  overflow: hidden;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nextLabel {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+}
+
+.nextNote {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.finishedActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.finishedLink {
+  color: var(--color-accent);
+  font-size: var(--font-size-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topBar,
+  .bottomBar {
+    transition: none;
+  }
+}

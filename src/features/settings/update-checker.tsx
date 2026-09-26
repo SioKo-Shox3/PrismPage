@@ -25,17 +25,17 @@ function UpdateSummary({ update }: { update: Update }) {
   return (
     <div className="update-checker-meta">
       <div>
-        <span className="eyebrow">Current</span>
+        <span className="eyebrow">現在の版</span>
         <strong>{normalizeVersion(update.currentVersion)}</strong>
         <span className="muted">インストール中</span>
       </div>
       <div>
-        <span className="eyebrow">Update</span>
+        <span className="eyebrow">新しい版</span>
         <strong>{normalizeVersion(update.version)}</strong>
         <span className="muted">{formatDate(update.date)}</span>
       </div>
       <div>
-        <span className="eyebrow">Install</span>
+        <span className="eyebrow">適用</span>
         <strong>アプリ内</strong>
         <span className="muted">完了後に再起動</span>
       </div>
@@ -141,7 +141,7 @@ export function UpdateChecker() {
       <div className="section-header">
         <Rocket size={18} />
         <div>
-          <h2>アプリ更新</h2>
+          <h3>アプリの更新</h3>
           <p>署名済みの更新情報を確認し、PrismPage 内でダウンロードと適用を行います。</p>
         </div>
       </div>
@@ -158,7 +158,7 @@ export function UpdateChecker() {
             <RefreshCw size={16} />
             {checking ? '確認中...' : 'アップデートを確認'}
           </button>
-          <span className="status-chip">現在: {currentVersion}</span>
+          <span className="status-chip">現在の版: {currentVersion}</span>
           {canInstall ? (
             <button
               type="button"
@@ -182,7 +182,7 @@ export function UpdateChecker() {
             onClick={() => void openExternalUrl(releasesPageUrl)}
           >
             <ExternalLink size={16} />
-            Releases
+            公開ページ
           </button>
         </div>
 
@@ -206,7 +206,7 @@ export function UpdateChecker() {
             <UpdateSummary update={availableUpdate} />
             {availableUpdate.body ? (
               <div className="update-release-notes">
-                <span className="eyebrow">Release notes</span>
+                <span className="eyebrow">更新内容</span>
                 <p>{availableUpdate.body}</p>
               </div>
             ) : null}

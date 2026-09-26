@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "books": [
+    {
+      "id": "sample-manga",
+      "title": "試し読み 光の階段",
+      "author": "PrismPage サンプル",
+      "kind": "epub",
+      "direction": "rtl",
+      "pageCount": 8,
+      "cover": "/mock/books/sample-manga/001.svg",
+      "pages": [
+        "/mock/books/sample-manga/001.svg",
+        "/mock/books/sample-manga/002.svg",
+        "/mock/books/sample-manga/003.svg",
+        "/mock/books/sample-manga/004.svg",
+        "/mock/books/sample-manga/005.svg",
+        "/mock/books/sample-manga/006.svg",
+        "/mock/books/sample-manga/007.svg",
+        "/mock/books/sample-manga/008.svg"
+      ]
+    },
+    {
+      "id": "sample-artbook",
+      "title": "色見本帳",
+      "author": "PrismPage サンプル",
+      "kind": "folder",
+      "direction": "ltr",
+      "pageCount": 6,
+      "cover": "/mock/books/sample-artbook/001.svg",
+      "pages": [
+        "/mock/books/sample-artbook/001.svg",
+        "/mock/books/sample-artbook/002.svg",
+        "/mock/books/sample-artbook/003.svg",
+        "/mock/books/sample-artbook/004.svg",
+        "/mock/books/sample-artbook/005.svg",
+        "/mock/books/sample-artbook/006.svg"
+      ]
+    },
+    {
+      "id": "sample-scan",
+      "title": "走査の練習帳",
+      "author": "PrismPage サンプル",
+      "kind": "archive",
+      "direction": "rtl",
+      "pageCount": 4,
+      "cover": "/mock/books/sample-scan/001.svg",
+      "pages": [
+        "/mock/books/sample-scan/001.svg",
+        "/mock/books/sample-scan/002.svg",
+        "/mock/books/sample-scan/003.svg",
+        "/mock/books/sample-scan/004.svg"
+      ]
+    }
+  ]
+}
