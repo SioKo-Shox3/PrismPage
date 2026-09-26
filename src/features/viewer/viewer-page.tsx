@@ -31,11 +31,13 @@ import { useEnhancement, type EnhancementView } from './use-enhancement'
 import { useBookPersistence } from './use-book-persistence'
 import { buildSpreads, pageToSpreadIndex, usesTwoPages, type Binding, type Spread } from './spread'
 import {
+  UI_EDGE_BAND_PX,
   UI_HIDE_DELAY_MS,
   currentViewSettings,
   fitSpread,
   initialViewerState,
   preloadPages,
+  uiHides,
   viewerReducer,
   type FitMode,
   type ViewerAction,
@@ -137,11 +139,22 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
   }, [stage])
 
   // 操作が止まったら UI を隠す。
+  const hides = uiHides(ui)
   useEffect(() => {
-    if (!ui.visible || ui.held) return
+    if (!hides) return
     const timer = window.setTimeout(() => dispatch({ type: 'hideUi' }), UI_HIDE_DELAY_MS)
     return () => window.clearTimeout(timer)
-  }, [ui.visible, ui.held, ui.activity])
+  }, [hides, ui.activity])
+
+  // ポインタが画面の上端・下端の帯にあるかを見る。帯の外で動かしても UI は出さない。
+  // タッチは指を置いた所でスワイプするので、帯に入ったと数えない。
+  const onViewerPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch') return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const y = event.clientY - rect.top
+    const inside = y < UI_EDGE_BAND_PX || y >= rect.height - UI_EDGE_BAND_PX
+    if (inside !== ui.edge) dispatch({ type: 'edgeBand', inside })
+  }
 
   const book = load.status === 'ready' ? load.book : null
   const binding: Binding = load.status === 'ready' ? load.binding : 'right'
@@ -482,7 +495,8 @@ function Viewer({ source, fromStart }: { source: string; fromStart: boolean }) {
     <div
       className={styles.viewer}
       data-ui={uiHidden ? 'hidden' : 'visible'}
-      onPointerMove={() => dispatch({ type: 'activity' })}
+      onPointerMove={onViewerPointerMove}
+      onPointerLeave={() => dispatch({ type: 'edgeBand', inside: false })}
     >
       <div
         ref={setStage}

@@ -13,6 +13,9 @@ export type FitMode = 'screen' | 'width'
 // 操作が止まってから UI を隠すまでの時間。
 export const UI_HIDE_DELAY_MS = 2500
 
+// ポインタが入ると UI を出す、画面の上端・下端の帯の高さ(CSS px)。
+export const UI_EDGE_BAND_PX = 64
+
 // 先読みする前後の見開きの数。
 export const PRELOAD_RADIUS = 2
 
@@ -43,6 +46,10 @@ export interface ViewerState {
     visible: boolean
     // ポインタが UI の上にある間は隠さない。
     held: boolean
+    // ポインタが上端・下端の帯にある間は出したまま隠さない。
+    edge: boolean
+    // 中央クリックで出した UI は、もう一度の中央クリックかページ送りまで隠さない。
+    pinned: boolean
     // 操作のたびに増やし、隠すまでの時間を数え直す合図にする。
     activity: number
   }
@@ -65,7 +72,8 @@ export type ViewerAction =
   | { type: 'setFit'; fit: FitMode }
   | { type: 'setZoom'; zoom: Zoom | null }
   | { type: 'resized'; width: number; height: number }
-  | { type: 'activity' }
+  // ポインタが上端・下端の帯に入った・出た。
+  | { type: 'edgeBand'; inside: boolean }
   | { type: 'hideUi' }
   | { type: 'toggleUi' }
   | { type: 'holdUi'; held: boolean }
@@ -78,7 +86,7 @@ export const initialViewerState: ViewerState = {
   fit: 'screen',
   zoom: null,
   viewport: { width: 0, height: 0 },
-  ui: { visible: true, held: false, activity: 0 },
+  ui: { visible: true, held: false, edge: false, pinned: false, activity: 0 },
 }
 
 // 本の綴じ方向を見開き計算の綴じ方向に変える。指定の無い本は右綴じ(設定の既定値)。
@@ -106,10 +114,17 @@ export function currentViewSettings(state: ViewerState): ViewSettings | null {
   }
 }
 
-// ページを動かす操作も「操作」に数え、UI を隠すまでの時間を数え直す(表示・非表示は変えない)。
+// 表示を組み変える操作も「操作」に数え、UI を隠すまでの時間を数え直す(表示・非表示は変えない)。
 // 表示する見開きや組み方が変わるので拡大も解く。
 function touched(state: ViewerState): ViewerState {
   return { ...state, zoom: null, ui: { ...state.ui, activity: state.ui.activity + 1 } }
+}
+
+// ページ送り。UI は出さず、中央クリックで出した UI も隠す。ポインタが帯か UI の上にある間だけは出したままにする。
+function paged(state: ViewerState): ViewerState {
+  const moved = touched(state)
+  const { ui } = moved
+  return { ...moved, ui: { ...ui, visible: ui.visible && (ui.edge || ui.held), pinned: false } }
 }
 
 export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerState {
@@ -135,27 +150,27 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       const index = pageToSpreadIndex(action.spreads, state.page)
       if (index < 0) return state
       // 最後の見開きの次は先頭へ戻らず、読み終わりの案内へ進む。
-      if (index >= action.spreads.length - 1) return touched({ ...state, finished: true })
-      return touched({ ...state, page: action.spreads[index + 1].pages[0] })
+      if (index >= action.spreads.length - 1) return paged({ ...state, finished: true })
+      return paged({ ...state, page: action.spreads[index + 1].pages[0] })
     }
     case 'prev': {
-      if (state.finished) return touched({ ...state, finished: false })
+      if (state.finished) return paged({ ...state, finished: false })
       const index = pageToSpreadIndex(action.spreads, state.page)
       if (index <= 0) return state
-      return touched({ ...state, page: action.spreads[index - 1].pages[0] })
+      return paged({ ...state, page: action.spreads[index - 1].pages[0] })
     }
     case 'first':
     case 'last': {
       const spread = action.type === 'first' ? action.spreads[0] : action.spreads.at(-1)
       if (!spread) return state
-      return touched({ ...state, page: spread.pages[0], finished: false })
+      return paged({ ...state, page: spread.pages[0], finished: false })
     }
     case 'seek': {
       if (state.load.status !== 'ready') return state
       const last = state.load.book.pages.length - 1
       if (last < 0) return state
       const page = Math.min(Math.max(0, Math.trunc(action.page)), last)
-      return touched({ ...state, page, finished: false })
+      return paged({ ...state, page, finished: false })
     }
     case 'toggleSpread':
       return touched({ ...state, view: { ...state.view, mode: action.twoPages ? 'single' : 'spread' } })
@@ -179,18 +194,26 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
         return state
       }
       return { ...state, viewport: { width: action.width, height: action.height }, zoom: null }
-    case 'activity':
-      return { ...state, ui: { ...state.ui, visible: true, activity: state.ui.activity + 1 } }
+    case 'edgeBand':
+      if (state.ui.edge === action.inside) return state
+      if (action.inside) return { ...state, ui: { ...state.ui, edge: true, visible: true } }
+      // 帯から出たところから、隠すまでの時間を数え始める。
+      return { ...state, ui: { ...state.ui, edge: false, activity: state.ui.activity + 1 } }
     case 'hideUi':
-      if (state.ui.held || !state.ui.visible) return state
+      if (!uiHides(state.ui)) return state
       return { ...state, ui: { ...state.ui, visible: false } }
     case 'toggleUi':
-      if (state.ui.visible) return { ...state, ui: { ...state.ui, visible: false } }
-      return { ...state, ui: { ...state.ui, visible: true, activity: state.ui.activity + 1 } }
+      if (state.ui.visible) return { ...state, ui: { ...state.ui, visible: false, pinned: false } }
+      return { ...state, ui: { ...state.ui, visible: true, pinned: true, activity: state.ui.activity + 1 } }
     case 'holdUi':
       if (state.ui.held === action.held) return state
       return { ...state, ui: { ...state.ui, held: action.held, visible: true } }
   }
+}
+
+// 出ている UI が、操作が止まったら隠れる状態か(ポインタが帯や UI の上に無く、中央クリックで出したものでもない)。
+export function uiHides(ui: ViewerState['ui']): boolean {
+  return ui.visible && !ui.held && !ui.edge && !ui.pinned
 }
 
 // 先読みするページを優先順に返す。表示中の見開き、次、前、2 つ先、2 つ前の順。
