@@ -1,0 +1,461 @@
+/* 本棚・お気に入りの画面と、本の右クリックメニュー。色・余白・書体はすべて tokens.css の変数で描く。 */
+
+/* 本棚の選択 */
+
+.shelfTabs ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.shelfTab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.shelfTab:hover {
+  border-color: var(--color-rule-strong);
+}
+
+.shelfTab[aria-current='page'] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.shelfTab:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.shelfCount {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.shelfSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.shelfBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.shelfHeading {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.shelfHeading p {
+  margin: var(--space-1) 0 0;
+}
+
+.shelfName {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  line-height: var(--line-height-tight);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.viewSwitch {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-right: var(--space-2);
+}
+
+.viewSwitch button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.inlineIcon {
+  margin-right: var(--space-1);
+  vertical-align: -2px;
+}
+
+/* 背表紙: 棚板の上に本を立てて並べる */
+
+.spineShelf {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 24px 3px;
+  margin: 0;
+  padding: var(--space-4) var(--space-4) 0;
+  list-style: none;
+  /* 棚板: 1 段(本の置き場 232px + 段の間 24px)ごとに、置き場の底へ 6px の板を引く。 */
+  background-image: linear-gradient(
+    to bottom,
+    transparent 226px,
+    var(--color-rule-strong) 226px 232px,
+    transparent 232px
+  );
+  background-size: 100% 256px;
+  background-origin: content-box;
+  background-clip: content-box;
+}
+
+.spineSlot {
+  display: flex;
+  align-items: flex-end;
+  height: 232px;
+  padding-bottom: 6px;
+}
+
+.spine {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  height: 220px;
+  padding: var(--space-3) 0 var(--space-2);
+  border: 0;
+  border-radius: 2px 2px 0 0;
+  background: var(--color-spine-1);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-on-spine);
+  font: inherit;
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--easing-standard);
+}
+
+.spine[data-tone='2'] {
+  background: var(--color-spine-2);
+}
+
+.spine[data-tone='3'] {
+  background: var(--color-spine-3);
+}
+
+.spine[data-tone='4'] {
+  background: var(--color-spine-4);
+}
+
+.spine[data-tone='5'] {
+  background: var(--color-spine-5);
+}
+
+.spine:not([aria-disabled]):hover {
+  transform: translateY(-6px);
+}
+
+.spine[aria-disabled] {
+  cursor: default;
+}
+
+.spine[data-missing] {
+  border: var(--rule-width) dashed var(--color-rule-strong);
+  background: var(--color-surface-sunken);
+  box-shadow: none;
+  color: var(--color-text-muted);
+}
+
+.spine:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.spineTitle {
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: 0.06em;
+  writing-mode: vertical-rl;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spineVolume,
+.spineMissing {
+  font-size: var(--font-size-xs);
+  writing-mode: vertical-rl;
+  white-space: nowrap;
+}
+
+.spineMissing {
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+.spine[data-missing] .spineMissing {
+  color: var(--color-warning);
+  opacity: 1;
+}
+
+.spineFormat {
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+
+/* 表紙のグリッド */
+
+.coverGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-6) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.coverCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.coverCard[aria-disabled] {
+  cursor: default;
+}
+
+.cover {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  aspect-ratio: 1 / 1.414;
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  box-shadow: var(--shadow-sm);
+  transition:
+    box-shadow var(--duration-fast) var(--easing-standard),
+    transform var(--duration-fast) var(--easing-standard);
+}
+
+.coverCard[data-missing] .cover {
+  border-style: dashed;
+  border-color: var(--color-rule-strong);
+  box-shadow: none;
+}
+
+.coverCard:not([aria-disabled]):hover .cover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.coverCard:focus-visible {
+  outline: none;
+}
+
+.coverCard:focus-visible .cover {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.coverIcon {
+  color: var(--color-rule-strong);
+}
+
+.coverFormat {
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+
+.coverTitle {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.coverFacts {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.coverBadge {
+  align-self: flex-start;
+}
+
+/* 本のメニュー */
+
+.menu {
+  position: fixed;
+  z-index: var(--z-dialog);
+  display: flex;
+  flex-direction: column;
+  width: 16rem;
+  max-height: calc(100vh - 16px);
+  padding: var(--space-2) 0;
+  overflow-y: auto;
+  border: var(--rule-width) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+}
+
+.menuTitle {
+  overflow: hidden;
+  margin: 0;
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-family: var(--font-heading);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menuGroup {
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.06em;
+}
+
+.menuNote,
+.menuError {
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.menuError {
+  color: var(--color-danger);
+}
+
+.menuShelves {
+  display: flex;
+  flex-direction: column;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover:not(:disabled),
+.menuItem:focus-visible {
+  outline: none;
+  background: var(--color-surface-sunken);
+}
+
+.menuItem:disabled {
+  cursor: progress;
+}
+
+.menuIcon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.starOn {
+  flex: none;
+  color: var(--color-accent);
+  fill: currentColor;
+}
+
+.menuCheck {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 15px;
+  color: var(--color-accent);
+}
+
+.menuLabel {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menuCount {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.menuSeparator {
+  height: var(--rule-width);
+  margin: var(--space-1) 0;
+  background: var(--color-rule);
+}
+
+.menuForm {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+}
+
+.menuInput {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: var(--rule-width) solid var(--color-rule-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.menuInput:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spine,
+  .cover {
+    transition: none;
+  }
+}

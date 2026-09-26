@@ -1,6 +1,6 @@
 [package]
 name = "prismpage"
-version = "0.1.9"
+version = "0.2.0"
 description = "An image-focused EPUB viewer with AI super-resolution support"
 authors = ["SioKo-Shox3"]
 license = ""
@@ -18,13 +18,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
-base64 = "0.22"
 percent-encoding = "2.3"
+pdfium-render = "0.9.4"
 quick-xml = "0.39"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-sha2 = "0.10"
 log = "0.4"
 tauri = { version = "2.11.2", features = [] }
 tauri-plugin-dialog = "2"
@@ -35,7 +34,12 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tempfile = "3.23"
 thiserror = "2.0"
+unrar = "0.5.8"
+unrar_sys = "0.5.8"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wait-timeout = "0.2"
 walkdir = "2.5"
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+imagesize = { version = "0.15", default-features = false, features = ["jpeg", "png", "webp", "heif", "gif", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }

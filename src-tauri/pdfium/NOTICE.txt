@@ -1,0 +1,49 @@
+PrismPage 第三者ソフトウェアの利用表明(PDFium)
+================================================
+
+PrismPage は PDF のページ寸法の取得と画像化に PDFium(Chromium 7881 版、
+bblanchon/pdfium-binaries のビルド)を使っています。PDFium はこのフォルダの
+pdfium.dll として同梱しており、その中に次の第三者のライブラリを含みます。
+各ライブラリのライセンス全文は licenses/ フォルダにあります。
+
+ライセンスがこの表明を求めているため、以下に英語の定型文を載せます。
+
+- FreeType(licenses/freetype.txt): ライセンスが、使ったことを文書で表明し、
+  バイナリ配布では FreeType Team の成果に一部基づく旨を記すことを求めています。
+- libjpeg-turbo / Independent JPEG Group(licenses/libjpeg_turbo.md、
+  licenses/libjpeg_turbo.ijg): バイナリだけを配布するとき、製品の文書に
+  IJG の成果に一部基づく旨の文を載せることを求めています。
+- PDFium・Abseil・LLVM libc(Apache License 2.0): これらの配布物には NOTICE
+  ファイルが含まれていないため、追加で表明する文はありません。
+- 上記以外(OpenJPEG・zlib・libpng・LibTIFF・Little CMS・ICU・AGG・
+  fast_float・simdutf)は、著作権表示とライセンス文を添えることを条件とし、
+  licenses/ の各ファイルを同梱して満たしています。zlib と libpng は表明を
+  歓迎していますが必須ではありません。下の一覧に名前を載せています。
+
+
+利用表明(PDFium)
+------------------
+
+FreeType の年は、同梱した版が取り込む FreeType 2.14.3 の著作権表示
+(1996-2026)に合わせています。
+
+FreeType
+  Portions of this software are copyright © 2026 The FreeType Project
+  (www.freetype.org). All rights reserved.
+  This software is based in part on the work of the FreeType Team.
+
+libjpeg-turbo / Independent JPEG Group
+  This software is based in part on the work of the Independent JPEG Group.
+
+PDFium が含むその他のライブラリ(ライセンスは licenses/ フォルダ):
+  Abseil (licenses/abseil.txt)
+  Anti-Grain Geometry 2.3 (licenses/agg23.txt)
+  fast_float (licenses/fast_float.txt)
+  ICU (licenses/icu.txt)
+  Little CMS (licenses/lcms.txt)
+  LLVM libc (licenses/llvm-libc.txt)
+  OpenJPEG (licenses/libopenjpeg.txt)
+  libpng (licenses/libpng.txt)
+  LibTIFF (licenses/libtiff.txt)
+  simdutf (licenses/simdutf.txt)
+  zlib (licenses/zlib.txt)

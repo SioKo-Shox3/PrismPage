@@ -6,7 +6,13 @@ use tauri::{AppHandle, Manager};
 use crate::app_error::{AppError, AppResult};
 
 pub mod engines;
+pub mod legacy;
 pub mod library;
+#[cfg(test)]
+mod perf_tests;
+pub mod source;
+pub mod store;
+pub mod thumbs;
 
 pub fn app_data_dir(app: &AppHandle) -> AppResult<PathBuf> {
     let data_dir = app

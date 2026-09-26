@@ -1,0 +1,45 @@
+/* 設定画面の旧バージョンのデータ。消す対象の一覧は画面とダイアログで同じ形にする。 */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--rule-width) solid var(--color-rule);
+}
+
+.item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-2);
+  border-bottom: var(--rule-width) solid var(--color-rule);
+}
+
+.label {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.detail {
+  grid-row: 1;
+  grid-column: 2;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.location {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.empty,
+.lead {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}

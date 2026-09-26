@@ -69,7 +69,8 @@ jobs:
             PrismPage の Windows インストーラです。
             このリリース以降、対応するインストール済みアプリでは設定画面または起動時通知からアプリ内アップデートを利用できます。
 
-            インストール後、Windows の「既定のアプリ」または「プログラムから開く」から `.epub` を PrismPage に関連付けできます。
+            インストールすると、対応する画像・アーカイブ・EPUB・PDF の「プログラムから開く」に PrismPage が加わります。既定のアプリにするときは、Windows の「既定のアプリ」または「プログラムから開く」で選んでください。
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-pc-windows-msvc
+          # 更新用の署名付きファイルは署名鍵のある release でだけ作る(tauri.conf.json は false にして、鍵の無い手元のビルドを通す)。
+          args: --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":true}}'

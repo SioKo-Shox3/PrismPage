@@ -1,0 +1,191 @@
+/* 設定画面の「AI エンジン」。エンジンは罫線で区切った縦の一覧に並べ、状態は札(Badge)で示す。 */
+
+/* 上の「AI 超解像」と同じ囲みに入るので、ページの段落の間隔をあける。 */
+.section {
+  margin-top: var(--space-6);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.notice {
+  margin: 0 0 0 var(--space-2);
+  color: var(--color-success);
+  font-size: var(--font-size-sm);
+}
+
+.note {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.engines {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--rule-width) solid var(--color-rule-strong);
+}
+
+.engine {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-2);
+  border-bottom: var(--rule-width) solid var(--color-rule);
+}
+
+.engineHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+}
+
+.engineName {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.engineKind {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.badges {
+  display: inline-flex;
+  gap: var(--space-2);
+  margin-left: auto;
+  align-self: center;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.facts dt {
+  color: var(--color-text-muted);
+}
+
+.facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text);
+}
+
+.path {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.progressText {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.failure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-soft);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.failure p {
+  margin: 0;
+}
+
+.failureTitle {
+  font-weight: 700;
+  color: var(--color-danger);
+}
+
+.failureLabel {
+  display: inline-block;
+  min-width: 4em;
+  margin-right: var(--space-2);
+  color: var(--color-text-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.clear {
+  margin-left: auto;
+  color: var(--color-danger);
+}
+
+.candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.subheading {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-lg);
+}
+
+.candidateList {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--rule-width) solid var(--color-rule);
+}
+
+.candidate {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-2);
+  border-bottom: var(--rule-width) solid var(--color-rule);
+}
+
+.candidateText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.candidateName {
+  font-weight: 700;
+}

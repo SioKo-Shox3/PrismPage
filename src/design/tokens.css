@@ -1,0 +1,125 @@
+/*
+ * デザイントークン。色の値はこのファイルにだけ書き、画面と部品は var(--…) だけで描く。
+ * テーマは <html data-theme="paper|ink"> で切り替える(解決は theme-effect.tsx)。
+ * 文字色と地の組み合わせはどちらのテーマでもコントラスト 4.5:1 以上に揃えている。
+ */
+
+:root {
+  /* 書体 */
+  --font-heading: 'Shippori Mincho', 'Yu Mincho', serif;
+  --font-body: 'Zen Kaku Gothic New', 'Yu Gothic UI', 'Yu Gothic', sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, monospace;
+
+  /* 文字サイズ */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.375rem;
+  --font-size-2xl: 1.75rem;
+  --font-size-3xl: 2.25rem;
+  --line-height-tight: 1.3;
+  --line-height-body: 1.7;
+
+  /* 余白 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* 角丸 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  /* 寸法 */
+  --control-height-sm: 32px;
+  --control-height-md: 40px;
+  --rule-width: 1px;
+  --sidebar-width: 232px;
+
+  /* 動き */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* 重なり順 */
+  --z-toast: 40;
+  --z-dialog: 50;
+}
+
+/* 紙: 生成り色の地に墨の文字、朱のアクセント(既定) */
+:root,
+:root[data-theme='paper'] {
+  color-scheme: light;
+  --color-bg: #f5f1e8;
+  --color-surface: #fbf8f1;
+  --color-surface-sunken: #f0ebe1;
+  --color-text: #22201c;
+  --color-text-muted: #6f6a60;
+  --color-rule: #d9d2c3;
+  --color-rule-strong: #bfb6a3;
+  --color-accent: #a93b28;
+  --color-accent-hover: #8f3120;
+  --color-accent-soft: #efdcd3;
+  --color-on-accent: #fbf8f1;
+  --color-success: #3f6b4a;
+  --color-success-soft: #dfe8dc;
+  --color-warning: #8a5a12;
+  --color-warning-soft: #f1e4c9;
+  --color-danger: #9b2c2c;
+  --color-danger-soft: #f2d9d4;
+  --color-focus: #a93b28;
+  --color-overlay: rgb(34 32 28 / 0.42);
+  /* 本棚の背表紙(布装の色)。文字は --color-on-spine で 4.5:1 以上 */
+  --color-spine-1: #2f3e55;
+  --color-spine-2: #3d5443;
+  --color-spine-3: #6b4a2f;
+  --color-spine-4: #6e2f33;
+  --color-spine-5: #4a4a44;
+  --color-on-spine: #f5f1e8;
+
+  --shadow-sm: 0 1px 2px rgb(34 32 28 / 0.08);
+  --shadow-md: 0 4px 12px rgb(34 32 28 / 0.1), 0 1px 2px rgb(34 32 28 / 0.06);
+  --shadow-lg: 0 16px 40px rgb(34 32 28 / 0.18), 0 2px 6px rgb(34 32 28 / 0.08);
+}
+
+/* 墨: 同じ構成の暗色版。朱は明度を上げて暗い地で 4.5:1 を満たす */
+:root[data-theme='ink'] {
+  color-scheme: dark;
+  --color-bg: #1c1a17;
+  --color-surface: #26231f;
+  --color-surface-sunken: #151311;
+  --color-text: #e8e2d4;
+  --color-text-muted: #a39c8e;
+  --color-rule: #3a362f;
+  --color-rule-strong: #524c42;
+  --color-accent: #e0785c;
+  --color-accent-hover: #ea8f76;
+  --color-accent-soft: #3d2721;
+  --color-on-accent: #1c1a17;
+  --color-success: #8fbf98;
+  --color-success-soft: #223024;
+  --color-warning: #d9b26a;
+  --color-warning-soft: #3a3020;
+  --color-danger: #ea8a7a;
+  --color-danger-soft: #3f2420;
+  --color-focus: #e0785c;
+  --color-overlay: rgb(0 0 0 / 0.55);
+  --color-spine-1: #34435a;
+  --color-spine-2: #3f5445;
+  --color-spine-3: #654a33;
+  --color-spine-4: #683439;
+  --color-spine-5: #4b4943;
+  --color-on-spine: #efe9dc;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35), 0 1px 2px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
+}

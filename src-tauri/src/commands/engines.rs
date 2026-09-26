@@ -1,125 +1,130 @@
 use tauri::AppHandle;
 
+use crate::app_error::AppResult;
+use crate::commands::run_blocking;
 use crate::models::{
-    EngineCandidate, EngineId, EngineInstallOption, EngineInstallOptionsResponse, EngineStatus,
-    EnhanceBookAssetImageRequest, EnhanceBookAssetImageResponse, EnhanceBookImageRequest,
-    EnhanceBookImageResponse, EnhanceImageRequest, EnhanceImageResponse,
-    ReadEnhancedBookImageRequest, ScanBookImagesRequest, ScanBookImagesResponse,
+    BatchEnhanceResult, EngineCandidate, EngineId, EngineInstallOption,
+    EngineInstallOptionsResponse, EngineStatus, EnhanceCacheInfo, EnhanceRequestResult,
+    EnhanceSettings,
 };
 use crate::services::engines as engine_service;
-use crate::services::library as library_service;
+
+// 状態確認も実行ファイルの起動(ヘルスチェック)を含むため、すべて裏のスレッドで実行する。
 
 #[tauri::command]
-pub fn get_engine_statuses(app: AppHandle) -> Result<Vec<EngineStatus>, String> {
-    engine_service::get_engine_statuses(&app).map_err(|error| error.to_string())
+pub async fn get_engine_statuses(app: AppHandle) -> AppResult<Vec<EngineStatus>> {
+    run_blocking(move || engine_service::get_engine_statuses(&app)).await
 }
 
 #[tauri::command]
-pub fn detect_engine_candidates() -> Result<Vec<EngineCandidate>, String> {
-    engine_service::detect_engine_candidates().map_err(|error| error.to_string())
+pub async fn detect_engine_candidates() -> AppResult<Vec<EngineCandidate>> {
+    run_blocking(engine_service::detect_engine_candidates).await
 }
 
 #[tauri::command]
-pub fn get_engine_install_options() -> Result<EngineInstallOptionsResponse, String> {
-    engine_service::get_engine_install_options().map_err(|error| error.to_string())
+pub async fn get_engine_install_options() -> AppResult<EngineInstallOptionsResponse> {
+    run_blocking(engine_service::get_engine_install_options).await
 }
 
 #[tauri::command]
-pub fn register_engine_directory(
+pub async fn register_engine_directory(
     app: AppHandle,
     engine_id: EngineId,
     directory_path: String,
-) -> Result<EngineStatus, String> {
-    engine_service::register_engine_directory(&app, engine_id, &directory_path)
-        .map_err(|error| error.to_string())
+) -> AppResult<EngineStatus> {
+    run_blocking(move || {
+        engine_service::register_engine_directory(&app, engine_id, &directory_path)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn import_engine_archive(
+pub async fn import_engine_archive(
     app: AppHandle,
     engine_id: EngineId,
     archive_path: String,
-) -> Result<EngineStatus, String> {
-    engine_service::import_engine_archive(&app, engine_id, &archive_path)
-        .map_err(|error| error.to_string())
+) -> AppResult<EngineStatus> {
+    run_blocking(move || engine_service::import_engine_archive(&app, engine_id, &archive_path))
+        .await
 }
 
 #[tauri::command]
-pub fn install_engine_from_release(
+pub async fn install_engine_from_release(
     app: AppHandle,
     option: EngineInstallOption,
-) -> Result<EngineStatus, String> {
-    engine_service::install_engine_from_release(&app, option).map_err(|error| error.to_string())
+) -> AppResult<EngineStatus> {
+    run_blocking(move || engine_service::install_engine_from_release(&app, option)).await
 }
 
 #[tauri::command]
-pub fn clear_engine_registration(
+pub async fn clear_engine_registration(
     app: AppHandle,
     engine_id: EngineId,
-) -> Result<Vec<EngineStatus>, String> {
-    engine_service::clear_engine_registration(&app, engine_id).map_err(|error| error.to_string())
+) -> AppResult<Vec<EngineStatus>> {
+    run_blocking(move || engine_service::clear_engine_registration(&app, engine_id)).await
 }
 
+/// 表示中・先読みのページの超解像を要求する。処理の進み具合はイベント `enhance-status` で届く。
+/// 受付番号は裏のスレッドへ渡す前に取る(待っている間に本が閉じられたら、その要求は積まない)。
 #[tauri::command]
-pub fn enhance_image(
+pub async fn request_enhancement(
     app: AppHandle,
-    request: EnhanceImageRequest,
-) -> Result<EnhanceImageResponse, String> {
-    engine_service::enhance_image(&app, request).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn enhance_book_image(
-    app: AppHandle,
-    request: EnhanceBookImageRequest,
-) -> Result<EnhanceBookImageResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        engine_service::enhance_book_image(&app, request)
+    book_id: String,
+    visible: Vec<usize>,
+    prefetch: Vec<usize>,
+    settings: EnhanceSettings,
+) -> AppResult<EnhanceRequestResult> {
+    let ticket = engine_service::enhancement_ticket(&app);
+    run_blocking(move || {
+        engine_service::request_enhancement(&app, ticket, &book_id, &visible, &prefetch, settings)
     })
     .await
-    .map_err(|error| format!("AI 高精細化処理の実行に失敗しました: {error}"))?
-    .map_err(|error| error.to_string())
 }
 
+/// 本の全ページの一括事前処理を始める(やめた後に呼べば処理済みを飛ばして続きから)。
+/// 表示中・先読みのページが常に先に処理される。進み具合はイベント `enhance-status` で届く。
 #[tauri::command]
-pub async fn scan_book_images(
+pub async fn start_batch_enhancement(
     app: AppHandle,
-    request: ScanBookImagesRequest,
-) -> Result<ScanBookImagesResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || library_service::scan_book_images(&app, request))
+    book_id: String,
+    settings: EnhanceSettings,
+) -> AppResult<BatchEnhanceResult> {
+    let ticket = engine_service::enhancement_ticket(&app);
+    run_blocking(move || engine_service::start_batch_enhancement(&app, ticket, &book_id, settings))
         .await
-        .map_err(|error| format!("EPUB 画像一覧の取得に失敗しました: {error}"))?
-        .map_err(|error| error.to_string())
 }
 
+/// 本の一括事前処理をやめる(表示中・先読みのページの処理は続ける)。
 #[tauri::command]
-pub async fn enhance_book_asset_image(
+pub async fn cancel_batch_enhancement(app: AppHandle, book_id: String) -> AppResult<()> {
+    engine_service::cancel_batch_enhancement(&app, &book_id);
+    Ok(())
+}
+
+/// 本の超解像ジョブをすべて取り消し、実行中のエンジンを終わらせる。
+#[tauri::command]
+pub async fn cancel_enhancement(app: AppHandle, book_id: String) -> AppResult<()> {
+    engine_service::cancel_enhancement(&app, &book_id);
+    Ok(())
+}
+
+/// 超解像キャッシュの使用量と上限を返す。
+#[tauri::command]
+pub async fn get_enhance_cache_info(app: AppHandle) -> AppResult<EnhanceCacheInfo> {
+    run_blocking(move || engine_service::get_enhance_cache_info(&app)).await
+}
+
+/// 超解像キャッシュの上限を変え、超えている分を古いものから消す。
+#[tauri::command]
+pub async fn set_enhance_cache_limit(
     app: AppHandle,
-    request: EnhanceBookAssetImageRequest,
-) -> Result<EnhanceBookAssetImageResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        engine_service::enhance_book_asset_image(&app, request)
-    })
-    .await
-    .map_err(|error| format!("EPUB 画像のAI高精細化処理に失敗しました: {error}"))?
-    .map_err(|error| error.to_string())
+    limit_bytes: u64,
+) -> AppResult<EnhanceCacheInfo> {
+    run_blocking(move || engine_service::set_enhance_cache_limit(&app, limit_bytes)).await
 }
 
+/// 超解像キャッシュをすべて消す。
 #[tauri::command]
-pub async fn read_enhanced_book_image(
-    app: AppHandle,
-    request: ReadEnhancedBookImageRequest,
-) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        engine_service::read_enhanced_book_image(&app, request)
-    })
-    .await
-    .map_err(|error| format!("高精細画像キャッシュの読み込みに失敗しました: {error}"))?
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn cancel_enhancement_jobs(app: AppHandle, reader_session_id: String) -> Result<(), String> {
-    engine_service::cancel_enhancement_jobs(&app, &reader_session_id)
-        .map_err(|error| error.to_string())
+pub async fn clear_enhance_cache(app: AppHandle) -> AppResult<EnhanceCacheInfo> {
+    run_blocking(move || engine_service::clear_enhance_cache(&app)).await
 }

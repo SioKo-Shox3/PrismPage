@@ -1,243 +1,107 @@
-import { useEffect, useRef, useState } from 'react'
-import { listen } from '@tauri-apps/api/event'
-import { Link, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
-import { BookOpenText, ImageUpscale, Library, Settings2 } from 'lucide-react'
-
-import prismLogo from '@/assets/prismpage-logo.png'
-import { useLibraryStore } from '@/features/library/book-store'
-import { useSettingsStore } from '@/features/settings/settings-store'
-import { StartupUpdateNotice } from '@/features/settings/startup-update-notice'
-import { extractEpubPreview } from '@/lib/epub'
-import { getEngineLabel } from '@/lib/engines'
+import { useState } from 'react'
+import { Link, Outlet, useLocation } from '@tanstack/react-router'
+import type { LucideIcon } from 'lucide-react'
 import {
-  importEpubFromPath,
-  isTauriRuntime,
-  readBookBase64,
-  takePendingOpenedEpubs,
-} from '@/lib/tauri'
+  BookOpen,
+  FileInput,
+  FolderTree,
+  History,
+  ImageUpscale,
+  Library,
+  Settings2,
+  Star,
+} from 'lucide-react'
 
-const navItems = [
-  { label: 'ライブラリ', href: '/', icon: Library },
-  { label: '読書設定', href: '/settings', icon: Settings2 },
-]
+import { pickBookFile, useOpenPath, useOpenRequests } from '@/app/open-requests'
+import prismLogo from '@/assets/prismpage-logo.svg?no-inline'
+import { StartupUpdateNotice } from '@/features/settings/startup-update-notice'
+import { isTauriRuntime } from '@/lib/tauri'
 
-function getPathKey(path: string) {
-  return path.trim().replace(/\//g, '\\').toLowerCase()
+import styles from './App.module.css'
+
+type NavItem = {
+  label: string
+  to: string
+  hash?: string
+  icon: LucideIcon
 }
+
+// 左ナビの並び(spec 3.1)。null は区切り線。
+const navItems: (NavItem | null)[] = [
+  { label: '読みかけ', to: '/', icon: BookOpen },
+  { label: '本棚', to: '/shelves', icon: Library },
+  { label: 'フォルダ', to: '/folders', icon: FolderTree },
+  { label: 'お気に入り', to: '/favorites', icon: Star },
+  { label: '履歴', to: '/history', icon: History },
+  null,
+  { label: 'AI 超解像', to: '/settings', hash: 'ai-engines', icon: ImageUpscale },
+  { label: '設定', to: '/settings', icon: Settings2 },
+]
 
 function App() {
   const location = useLocation()
-  const navigate = useNavigate()
-  const books = useLibraryStore((state) => state.books)
-  const upsertBook = useLibraryStore((state) => state.upsertBook)
-  const preferredEngine = useSettingsStore((state) => state.preferredEngine)
-  const [openedFileMessage, setOpenedFileMessage] = useState<string | null>(null)
-  const [openedFileError, setOpenedFileError] = useState<string | null>(null)
   const [startupUpdateVisible, setStartupUpdateVisible] = useState(false)
-  const processingPathsRef = useRef(new Set<string>())
-  const isReaderRoute = location.pathname.startsWith('/reader/')
+  const isViewerRoute = location.pathname.startsWith('/viewer/')
+  const openPath = useOpenPath()
+  useOpenRequests()
 
-  const completedBooks = books.filter((book) => (book.progressPercentage ?? 0) >= 99).length
-
-  useEffect(() => {
-    if (!isTauriRuntime) {
-      return
+  const openFile = async () => {
+    try {
+      const path = await pickBookFile()
+      if (path) openPath(path)
+    } catch (error) {
+      console.error('ファイルを開くダイアログを出せませんでした', error)
     }
-
-    let unlisten: (() => void) | undefined
-    let cancelled = false
-
-    async function openEpubPaths(paths: string[]) {
-      const uniquePaths = new Map<string, string>()
-      for (const path of paths) {
-        if (path.toLowerCase().endsWith('.epub')) {
-          uniquePaths.set(getPathKey(path), path)
-        }
-      }
-
-      const epubPaths = [...uniquePaths.entries()]
-      if (epubPaths.length === 0) {
-        return
-      }
-
-      setOpenedFileError(null)
-
-      for (const [normalizedKey, path] of epubPaths) {
-        if (processingPathsRef.current.has(normalizedKey)) {
-          continue
-        }
-
-        processingPathsRef.current.add(normalizedKey)
-        try {
-          const existingBook = useLibraryStore
-            .getState()
-            .books.find((book) => book.sourcePath && getPathKey(book.sourcePath) === normalizedKey)
-
-          if (existingBook) {
-            setOpenedFileMessage(`既に取り込み済みの EPUB を開きました: ${existingBook.title}`)
-            await navigate({
-              to: '/reader/$bookId',
-              params: { bookId: existingBook.id },
-            })
-            continue
-          }
-
-          setOpenedFileMessage('EPUB を取り込んでいます...')
-          const imported = await importEpubFromPath(path)
-          const importedKey = getPathKey(imported.sourcePath)
-          const duplicateBook = useLibraryStore
-            .getState()
-            .books.find((book) => book.sourcePath && getPathKey(book.sourcePath) === importedKey)
-
-          if (duplicateBook) {
-            setOpenedFileMessage(`既に取り込み済みの EPUB を開きました: ${duplicateBook.title}`)
-            await navigate({
-              to: '/reader/$bookId',
-              params: { bookId: duplicateBook.id },
-            })
-            continue
-          }
-
-          const base64 = await readBookBase64(imported.id)
-          const preview = await extractEpubPreview(base64)
-
-          upsertBook({
-            author: preview.author,
-            coverDataUrl: preview.coverDataUrl,
-            fileName: imported.fileName,
-            id: imported.id,
-            importedAt: Date.now(),
-            size: imported.size,
-            sourcePath: imported.sourcePath,
-            storedPath: imported.storedPath,
-            title: preview.title || imported.fileName.replace(/\.epub$/i, ''),
-          })
-
-          setOpenedFileMessage(`EPUB を取り込みました: ${preview.title || imported.fileName}`)
-          await navigate({
-            to: '/reader/$bookId',
-            params: { bookId: imported.id },
-          })
-        } catch (error) {
-          setOpenedFileError(
-            error instanceof Error ? error.message : 'EPUB 起動ファイルの取り込みに失敗しました。',
-          )
-        } finally {
-          processingPathsRef.current.delete(normalizedKey)
-        }
-      }
-    }
-
-    async function drainPendingOpenedEpubs() {
-      try {
-        const paths = await takePendingOpenedEpubs()
-        if (!cancelled) {
-          await openEpubPaths(paths)
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setOpenedFileError(
-            error instanceof Error ? error.message : 'EPUB 起動ファイルの確認に失敗しました。',
-          )
-        }
-      }
-    }
-
-    void listen('epub-files-opened', () => {
-      void drainPendingOpenedEpubs()
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose()
-          return
-        }
-
-        unlisten = dispose
-        void drainPendingOpenedEpubs()
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setOpenedFileError(
-            error instanceof Error ? error.message : 'EPUB 起動イベントの監視に失敗しました。',
-          )
-        }
-      })
-
-    return () => {
-      cancelled = true
-      unlisten?.()
-    }
-  }, [navigate, upsertBook])
+  }
 
   return (
-    <div className={`app-shell${isReaderRoute ? ' app-shell--reader' : ''}`}>
-      {!isReaderRoute ? (
-        <aside className="sidebar">
-          <div className="brand-panel">
-            <img src={prismLogo} alt="" className="brand-logo" />
-            <div>
-              <span className="eyebrow">AI EPUB Viewer</span>
-              <h1>PrismPage</h1>
-              <p>画像重視の EPUB を本棚からすぐ読める Tauri ビューワー。</p>
-            </div>
+    <div className={isViewerRoute ? styles.viewerShell : styles.shell}>
+      {!isViewerRoute ? (
+        <aside className={styles.sidebar}>
+          <div className={styles.brand}>
+            <img src={prismLogo} alt="" className={styles.brandLogo} />
+            <span className={styles.brandName}>PrismPage</span>
           </div>
 
-          <nav className="main-nav" aria-label="アプリケーションナビゲーション">
-            {navItems.map((item) => {
+          <nav className={styles.nav} aria-label="アプリケーションナビゲーション">
+            {navItems.map((item, index) => {
+              if (!item) {
+                return <hr key={`separator-${index}`} className={styles.navSeparator} />
+              }
+
               const Icon = item.icon
-              const isActive = location.pathname === item.href
 
               return (
                 <Link
-                  key={item.href}
-                  to={item.href}
-                  className={`nav-link${isActive ? ' is-active' : ''}`}
+                  key={`${item.to}#${item.hash ?? ''}`}
+                  to={item.to}
+                  hash={item.hash}
+                  className={styles.navLink}
+                  // 「設定」と「AI 超解像」は同じパスでハッシュだけが違うので、ハッシュまで一致したときだけ選択表示にする。
+                  // 検索パラメータは見ない(フォルダ画面は登録フォルダの中を辿っても「フォルダ」を選択表示にする)。
+                  // 選択中の aria-current は Link が付ける。
+                  activeOptions={{ exact: true, includeHash: true, includeSearch: false }}
                 >
-                  <Icon size={18} />
+                  <Icon size={16} aria-hidden="true" />
                   <span>{item.label}</span>
                 </Link>
               )
             })}
           </nav>
 
-          <section className="status-card">
-            <div className="status-card-header">
-              <BookOpenText size={18} />
-              <h2>ライブラリ</h2>
-            </div>
-            <dl>
-              <div>
-                <dt>登録冊数</dt>
-                <dd>{books.length}</dd>
-              </div>
-              <div>
-                <dt>読了済み</dt>
-                <dd>{completedBooks}</dd>
-              </div>
-            </dl>
-          </section>
-
-          <section className="status-card">
-            <div className="status-card-header">
-              <ImageUpscale size={18} />
-              <h2>AI エンジン</h2>
-            </div>
-            <p className="status-card-value">{getEngineLabel(preferredEngine)}</p>
-            <p className="muted">表示中の画像へ自動適用します。</p>
-          </section>
+          {/* OS のファイル選択はアプリ上でだけ出せる。 */}
+          {isTauriRuntime ? (
+            <button type="button" className={`${styles.navLink} ${styles.openFile}`} onClick={() => void openFile()}>
+              <FileInput size={16} aria-hidden="true" />
+              <span>ファイルを開く…</span>
+            </button>
+          ) : null}
         </aside>
       ) : null}
 
-      <main className={`content-shell${isReaderRoute ? ' content-shell--reader' : ''}`}>
-        <div
-          className={`app-toast-stack${isReaderRoute ? ' is-reader' : ''}`}
-          hidden={!startupUpdateVisible && !openedFileMessage && !openedFileError}
-        >
+      <main className={styles.content}>
+        <div className={styles.noticeStack} hidden={!startupUpdateVisible}>
           <StartupUpdateNotice onVisibleChange={setStartupUpdateVisible} />
-          {openedFileMessage ? (
-            <div className="message-strip is-success">{openedFileMessage}</div>
-          ) : null}
-          {openedFileError ? <div className="message-strip is-error">{openedFileError}</div> : null}
         </div>
         <Outlet />
       </main>
