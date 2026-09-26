@@ -453,7 +453,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - notes: ユーザー決定(2026-09-26): 本の終わりは案内を残し、文言とボタンだけ見直す。
 
 ## V-10: 画像ファイルを直接開いたときは端で最初・最後へ回る
-- status: todo
+- status: done
 - done-when: `open_book` が画像ファイルを指定されて親フォルダを開いたとき、結果の `OpenedBook` に開き方 `openMode: 'image'` を載せる(フォルダ・アーカイブ・EPUB・PDF を指定したときは `'book'`)。Rust の `models.rs`・`src/types/app.ts`・`src/lib/tauri.ts`・モックを一組で変え、`cargo test` に画像ファイル指定で `'image'`、フォルダ指定で `'book'` になるテストがある。ビューアは `openMode` が `'image'` のとき、最後の見開きの次は最初の見開き、最初の見開きの前は最後の見開きへ移り、「読み終わりました」の案内を出さない(スライダー・Home / End は今までどおり)。読書位置の保存は今までどおり。`'book'` のときの動きは変えない。ビューアの両方の開き方のテストがある。
 - verify: `cargo test --manifest-path src-tauri\Cargo.toml`
 - verify: `cargo check --manifest-path src-tauri\Cargo.toml`

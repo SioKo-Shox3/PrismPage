@@ -203,7 +203,14 @@ async function openMockBook(path: unknown, fromStart: boolean): Promise<OpenedBo
     : await Promise.all(book.pages.map(mockPageInfo))
   const saved = savedBooks.get(book.id)
   const startIndex = fromStart ? 0 : Math.min(saved?.page ?? 0, Math.max(0, pages.length - 1))
-  const opened: OpenedBook = { bookId: book.id, title: book.title, startIndex, pages }
+  // モックは画像ファイルを指定して開けないので、いつも本の開き方になる。
+  const opened: OpenedBook = {
+    bookId: book.id,
+    title: book.title,
+    startIndex,
+    openMode: 'book',
+    pages,
+  }
   openedPageCounts.set(book.id, pages.length)
   recordMockOpened(path, book, startIndex)
   if (saved?.view) opened.viewSettings = saved.view

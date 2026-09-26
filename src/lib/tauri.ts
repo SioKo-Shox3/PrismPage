@@ -73,7 +73,8 @@ export async function listenOpenRequests(handler: () => void): Promise<UnlistenF
   return listen('open-path-requested', () => handler())
 }
 
-// フォルダまたは画像ファイルを本として開く。画像ファイルなら親フォルダを 1 冊として、その画像から始める。
+// フォルダまたは画像ファイルを本として開く。画像ファイルなら親フォルダを 1 冊として、その画像から始め、
+// 結果の `openMode` を `image` にする(それ以外は `book`)。
 // `fromStart` なら保存してある読書位置を使わず先頭から始める(次の巻・前の巻へ移るとき)。
 export async function openBook(path: string, options: { fromStart?: boolean } = {}) {
   return callAfterSaves<OpenedBook>('open_book', { path, fromStart: options.fromStart ?? false })

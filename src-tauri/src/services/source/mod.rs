@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::app_error::{AppError, AppResult};
-use crate::models::{OpenedBook, PageInfo, PageProgression};
+use crate::models::{OpenMode, OpenedBook, PageInfo, PageProgression};
 use crate::services::store::ItemKind;
 
 pub mod adjacent;
@@ -213,6 +213,11 @@ pub fn open_source(path: &Path, cache: &BookCache) -> AppResult<OpenedSource> {
         book_id: book_id_for_path(&root),
         title: book_title(&root),
         start_index,
+        open_mode: if explicit_start {
+            OpenMode::Image
+        } else {
+            OpenMode::Book
+        },
         page_progression: source.page_progression(),
         pages: source.pages().to_vec(),
         view_settings: None,
@@ -443,6 +448,7 @@ mod tests {
 
         let opened = open_source(&path, &cache).unwrap();
         assert_eq!(opened.kind, ItemKind::Rar);
+        assert_eq!(opened.book.open_mode, OpenMode::Book);
         assert_eq!(opened.book.title, "vol");
         let names: Vec<_> = opened.book.pages.iter().map(|page| page.name.as_str()).collect();
         assert_eq!(names, vec!["2.png", "10.png"]);
@@ -467,6 +473,7 @@ mod tests {
         let opened = open_source(&path, &cache).unwrap();
 
         assert_eq!(opened.kind, ItemKind::Pdf);
+        assert_eq!(opened.book.open_mode, OpenMode::Book);
         assert_eq!(opened.book.title, "画集");
         // 見開きの計算に使う寸法は PDF のページの縦横比のまま。
         let sizes: Vec<_> = opened
@@ -500,6 +507,13 @@ mod tests {
         assert_eq!(from_image.start_index, 2);
         assert_eq!(from_image.pages.len(), 3);
         assert_eq!(from_image.book_id, from_folder.book_id);
+        // 画像ファイルを指定したときだけ画像の開き方になる(同じフォルダでもフォルダ指定なら本の開き方)。
+        assert_eq!(from_image.open_mode, OpenMode::Image);
+        assert_eq!(from_folder.open_mode, OpenMode::Book);
+        // フロントの `OpenedBook.openMode` と同じ名前・値で渡る。
+        let json = |book: &OpenedBook| serde_json::to_value(book).unwrap()["openMode"].clone();
+        assert_eq!(json(&from_image), "image");
+        assert_eq!(json(&from_folder), "book");
     }
 
     #[test]

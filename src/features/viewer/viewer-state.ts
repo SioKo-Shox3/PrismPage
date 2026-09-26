@@ -129,6 +129,11 @@ function paged(state: ViewerState): ViewerState {
   return { ...moved, ui: { ...ui, visible: ui.visible && (ui.edge || ui.held), pinned: false } }
 }
 
+// 端で最初・最後の見開きへ回るか(画像ファイルを直接開いたとき)。
+function wraps(state: ViewerState): boolean {
+  return state.load.status === 'ready' && state.load.book.openMode === 'image'
+}
+
 export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerState {
   switch (action.type) {
     case 'opened': {
@@ -151,14 +156,23 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       if (state.finished) return state
       const index = pageToSpreadIndex(action.spreads, state.page)
       if (index < 0) return state
-      // 最後の見開きの次は先頭へ戻らず、読み終わりの案内へ進む。
-      if (index >= action.spreads.length - 1) return paged({ ...state, finished: true })
+      if (index >= action.spreads.length - 1) {
+        // 画像ファイルを直接開いたときは最初の見開きへ回る。本は先頭へ戻らず、読み終わりの案内へ進む。
+        if (wraps(state)) return paged({ ...state, page: action.spreads[0].pages[0] })
+        return paged({ ...state, finished: true })
+      }
       return paged({ ...state, page: action.spreads[index + 1].pages[0] })
     }
     case 'prev': {
       if (state.finished) return paged({ ...state, finished: false })
       const index = pageToSpreadIndex(action.spreads, state.page)
-      if (index <= 0) return state
+      if (index < 0) return state
+      if (index === 0) {
+        // 画像ファイルを直接開いたときは最初の見開きの前は最後の見開きへ回る。
+        const last = action.spreads.at(-1)
+        if (wraps(state) && last) return paged({ ...state, page: last.pages[0] })
+        return state
+      }
       return paged({ ...state, page: action.spreads[index - 1].pages[0] })
     }
     case 'first':
