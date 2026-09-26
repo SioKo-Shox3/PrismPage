@@ -410,3 +410,45 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
 - paths: src/**, src-tauri/src/**, scripts/**, TASKS.md
+
+# MS8 ビューアの手直し(0.2.0 の実機確認から)
+
+## V-07: 情報バーを中央クリックと上下の端の帯でだけ出す
+- status: todo
+- done-when: ビューアの上でポインタを動かしただけでは情報バーが出ない。ポインタが画面の上端・下端の帯(高さ 64px。定数にする)に入ると出て、帯と情報バーの上にある間は隠れず、帯から出て 2.5 秒操作が無いと隠れる。中央クリックは今までどおり出し入れを切り替え、中央クリックで出したバーはもう一度の中央クリックか、ページ送りまで出たままにする。クリック・ホイール・キー・スワイプでのページ送りでは出ない(帯の中にポインタがある間を除く)。拡大中のクリックの扱い(どこでも出し入れ)は変えない。これらを jsdom と仮想時計のテストで確かめ(中央付近でポインタを動かしても `data-ui="hidden"` のまま、上端の帯に入ると出る、帯から出て 2.5 秒で隠れる、左右クリックとホイールで送っても出ない、中央クリックで出して送ると隠れる)、`run shots` の画面を開いて崩れていないことを見ている。
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run shots`
+- paths: src/features/viewer/**, docs/rebuild/spec.md
+- notes: ユーザー決定(2026-09-26)。マウスのクリックでページを送る読み方で、マウスを動かすたびにバーが出るのを止める。spec 3.3 は更新済み。
+
+## V-08: 下端中央のページ移動スライダー
+- status: todo
+- done-when: 情報バーが出ている間、下端中央(幅は画面の 60%、最大 720px ほど)につまみ付きのスライダーが出る。左右の端に現在のページ(見開きなら先のページ)と総ページを出し、つまみのドラッグ中はつまみの上に行き先のページ番号を出し、離した所の見開きへ移る。右綴じは右が先頭(右から左へ進む)。`role="slider"` と `aria-valuemin`・`aria-valuemax`・`aria-valuenow`・`aria-valuetext` を持ち、フォーカス中の ← / → / Home / End で動かせる(綴じ方向に合わせる)。情報バーが隠れている間は今の細い進捗線だけを出し、進捗線はドラッグで動かさない(表示のみ)。スライダーの位置計算は純粋関数にしてテストがあり(右綴じ・左綴じ、端、見開き)、ドラッグで移るテストがある。紙・墨の `run shots` にバーを出した状態のビューアを 1 枚ずつ足し、開いて見ている。
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run shots`
+- paths: src/features/viewer/**, src/design/**, scripts/shots/**
+- notes: ユーザー決定(2026-09-26)。手本は TsubameViewer の下端中央のスライダー。行き先の縮小画像は出さない。
+
+## V-09: 「読み終わりました」の案内の文言とボタンを見直す
+- status: todo
+- done-when: 本として開いた本で最後の見開きの次に出す案内が、見出し「読み終わりました」・書名と、ボタン「次の巻を読む」(次の巻があるときだけ。先頭から開く)・「最初から読む」(この本の最初の見開きへ)・「閉じる」(ビューアを閉じて開いた元の画面へ戻る。Esc と同じ)を持つ。次の巻が無いときは「次の巻はありません」とだけ添える。案内から前へ送ると最後の見開きに戻る(今と同じ)。各ボタンの動きのテストがある。紙・墨の `run shots` で案内の画面を開いて見ている。
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run shots`
+- paths: src/features/viewer/**, scripts/shots/**
+- notes: ユーザー決定(2026-09-26): 本の終わりは案内を残し、文言とボタンだけ見直す。
+
+## V-10: 画像ファイルを直接開いたときは端で最初・最後へ回る
+- status: todo
+- done-when: `open_book` が画像ファイルを指定されて親フォルダを開いたとき、結果の `OpenedBook` に開き方 `openMode: 'image'` を載せる(フォルダ・アーカイブ・EPUB・PDF を指定したときは `'book'`)。Rust の `models.rs`・`src/types/app.ts`・`src/lib/tauri.ts`・モックを一組で変え、`cargo test` に画像ファイル指定で `'image'`、フォルダ指定で `'book'` になるテストがある。ビューアは `openMode` が `'image'` のとき、最後の見開きの次は最初の見開き、最初の見開きの前は最後の見開きへ移り、「読み終わりました」の案内を出さない(スライダー・Home / End は今までどおり)。読書位置の保存は今までどおり。`'book'` のときの動きは変えない。ビューアの両方の開き方のテストがある。
+- verify: `cargo test --manifest-path src-tauri\Cargo.toml`
+- verify: `cargo check --manifest-path src-tauri\Cargo.toml`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
+- verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`
+- paths: src-tauri/src/**, src/**
+- notes: ユーザー決定(2026-09-26)。危険地帯(フロントと Rust の契約)。評価者を通す。読みかけ・履歴から開き直したときはフォルダを開くので `'book'` になる。
