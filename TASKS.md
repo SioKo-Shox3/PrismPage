@@ -434,7 +434,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - notes: ユーザー決定(2026-09-26)。手本は TsubameViewer の下端中央のスライダー。行き先の縮小画像は出さない。
 
 ## V-08b: スライダーの下地を不透明にし、両端のページ番号を読みやすくする
-- status: todo
+- status: done
 - done-when: スライダーの下地が上端の情報バーと同じ不透明な面(トークンの色)になり、下のページの文字や絵が透けない。両端の現在のページ・総ページの数字が本文と同じ文字サイズ以上で、紙・墨の両テーマで背景との対比が 4.5:1 以上ある(色はトークンだけで描く)。紙・墨の `viewer-bar` のスクリーンショットを開き、ページ下端の文字がスライダーに透けていないこと、数字が読めることを確かめている。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run build`

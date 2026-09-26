@@ -78,7 +78,7 @@
   min-height: var(--control-height-md);
   padding: var(--space-2) var(--space-4);
   border-bottom: var(--rule-width) solid var(--color-rule);
-  background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+  background: var(--color-bg);
   transition:
     opacity var(--duration-normal) var(--easing-standard),
     visibility var(--duration-normal) var(--easing-standard);
@@ -96,7 +96,7 @@
   pointer-events: none;
 }
 
-/* 下端中央のページ移動スライダー(情報バーが出ている間だけ) */
+/* 下端中央のページ移動スライダー(情報バーが出ている間だけ)。下のページが透けないよう上端の情報バーと同じ不透明な面にする */
 .slider {
   display: flex;
   align-items: center;
@@ -107,7 +107,7 @@
   padding: var(--space-2) var(--space-4);
   border: var(--rule-width) solid var(--color-rule);
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+  background: var(--color-bg);
   box-shadow: var(--shadow-sm);
   pointer-events: auto;
   transition:
@@ -118,8 +118,8 @@
 .sliderEnd {
   flex: none;
   min-width: 3ch;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  font-size: var(--font-size-md);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
