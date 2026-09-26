@@ -5,6 +5,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { routeTree } from '@/app/router'
 import type { EngineStatus, EnhanceStatusEvent, OpenedBook } from '@/types/app'
 
+import { defaultSettings, useSettingsStore } from '@/features/settings/settings-store'
+
 import { useEnhancedBooksStore } from './enhance-store'
 
 const book: OpenedBook = {
@@ -78,7 +80,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   localStorage.clear()
-  useEnhancedBooksStore.setState({ bookIds: [] })
+  useEnhancedBooksStore.setState({ books: [] })
+  useSettingsStore.setState({ ...defaultSettings })
   tauri.statuses = [engine('waifu2x', false), engine('real-cugan', true)]
   tauri.handlers.clear()
   tauri.listenFails = false
@@ -140,7 +143,7 @@ describe('ビューアの AI 切り替え', () => {
       denoise: -1,
     })
     expect(button.getAttribute('aria-pressed')).toBe('true')
-    expect(useEnhancedBooksStore.getState().bookIds).toEqual([book.bookId])
+    expect(useEnhancedBooksStore.getState().books).toEqual([{ bookId: book.bookId, enabled: true }])
     expect(localStorage.getItem('prismpage-enhanced-books')).toContain(book.bookId)
     expect(await screen.findByText('AI 2× 処理中')).toBeTruthy()
     expect(screen.getByText('先の 4 ページを準備中 0/4')).toBeTruthy()
@@ -164,7 +167,7 @@ describe('ビューアの AI 切り替え', () => {
     // OFF で本のジョブを取り消し、元画像に戻す。
     fireEvent.click(button)
     await vi.waitFor(() => expect(tauri.cancel).toHaveBeenCalledWith(book.bookId))
-    expect(useEnhancedBooksStore.getState().bookIds).toEqual([])
+    expect(useEnhancedBooksStore.getState().books).toEqual([{ bookId: book.bookId, enabled: false }])
     await vi.waitFor(() => expect(pageImage(1).getAttribute('src')).toBe('data:,1'))
     expect(screen.queryByText(/AI 2×/)).toBeNull()
   })
@@ -217,6 +220,37 @@ describe('ビューアの AI 切り替え', () => {
 
     cleanup()
     expect(tauri.cancel).toHaveBeenCalledWith(book.bookId)
+  })
+
+  it('記録の無い本は設定「初めて開く本でも AI をオンにする」に従う', async () => {
+    useSettingsStore.setState({ enhanceNewBooks: true })
+    await renderViewer()
+    await vi.waitFor(() => expect(tauri.request).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: 'AI オン' }).getAttribute('aria-pressed')).toBe('true')
+    // 開いただけでは記録しない(設定を戻せば、この本も設定に従う)。
+    expect(useEnhancedBooksStore.getState().books).toEqual([])
+
+    cleanup()
+    tauri.request.mockClear()
+    useSettingsStore.setState({ enhanceNewBooks: false })
+    await renderViewer()
+    expect(screen.getByRole('button', { name: 'AI オフ' }).getAttribute('aria-pressed')).toBe('false')
+    await act(() => Promise.resolve())
+    expect(tauri.request).not.toHaveBeenCalled()
+  })
+
+  it('オフに切り替えた本は、設定がオンでもオフで開く', async () => {
+    useSettingsStore.setState({ enhanceNewBooks: true })
+    await renderViewer()
+    fireEvent.click(await screen.findByRole('button', { name: 'AI オン' }))
+    expect(useEnhancedBooksStore.getState().books).toEqual([{ bookId: book.bookId, enabled: false }])
+
+    cleanup()
+    tauri.request.mockClear()
+    await renderViewer()
+    expect(screen.getByRole('button', { name: 'AI オフ' }).getAttribute('aria-pressed')).toBe('false')
+    await act(() => Promise.resolve())
+    expect(tauri.request).not.toHaveBeenCalled()
   })
 
   it('使えるエンジンが無ければ要求せず、設定画面への案内を出す', async () => {

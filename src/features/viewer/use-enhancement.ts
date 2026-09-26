@@ -13,7 +13,7 @@ import {
 } from '@/lib/tauri'
 import type { EnhanceSettings } from '@/types/app'
 
-import { useEnhancedBooksStore } from './enhance-store'
+import { isBookEnhanced, useEnhancedBooksStore } from './enhance-store'
 import { prefetchPages, resolveEnhanceSettings, type BatchProgress, type EnhanceProgress } from './enhancement'
 
 // ビューアの AI 超解像の状態。
@@ -49,7 +49,10 @@ export function useEnhancement(
   pageCount: number,
   pageWidth: number | null = null,
 ) {
-  const enabled = useEnhancedBooksStore((state) => bookId !== null && state.bookIds.includes(bookId))
+  const enhanceNewBooks = useSettingsStore((state) => state.enhanceNewBooks)
+  const enabled = useEnhancedBooksStore(
+    (state) => bookId !== null && isBookEnhanced(state.books, bookId, enhanceNewBooks),
+  )
   const setBookEnhanced = useEnhancedBooksStore((state) => state.setBookEnhanced)
   const preferred = useSettingsStore((state) => state.preferredEngine)
   const models = useSettingsStore((state) => state.enhanceModels)
