@@ -20,12 +20,17 @@ export type PageSpread = 'left' | 'right'
 // ページを進める向き(Rust の `PageProgression`)。`rtl` は右綴じ。
 export type PageProgression = 'ltr' | 'rtl'
 
+// 本の開き方(Rust の `OpenMode`)。画像ファイルを指定して親フォルダを開いたときは `image`、
+// フォルダ・アーカイブ・EPUB・PDF を指定したときは `book`。`image` のビューアは端で最初・最後の見開きへ回る。
+export type OpenMode = 'book' | 'image'
+
 // `open_book` の結果(Rust の `OpenedBook`)。`bookId` でページ配信などから本を指す。
 export interface OpenedBook {
   bookId: string
   title: string
   // 最初に表示するページ。画像ファイルを指定して開いたときはその画像。
   startIndex: number
+  openMode: OpenMode
   // 本が指定するページを進める向き。指定の無い本はキー自体が無い(設定の既定値に従う)。
   pageProgression?: PageProgression
   pages: PageInfo[]

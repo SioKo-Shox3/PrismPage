@@ -35,6 +35,15 @@ pub enum PageProgression {
     Rtl,
 }
 
+/// 本の開き方。画像ファイルを指定して親フォルダを開いたときは `Image`、それ以外(フォルダ・アーカイブ・
+/// EPUB・PDF を指定したとき)は `Book`。ビューアは `Image` のとき端で最初・最後の見開きへ回る。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenMode {
+    Book,
+    Image,
+}
+
 /// `open_book` の結果。`book_id` はページ配信などで本を指す ID。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +52,8 @@ pub struct OpenedBook {
     pub title: String,
     /// 最初に表示するページ(画像ファイルを指定して開いたときはその画像)。
     pub start_index: usize,
+    /// 本の開き方(画像ファイルを指定して開いたか)。
+    pub open_mode: OpenMode,
     /// 本が指定するページを進める向き。指定の無い本は省く(設定の既定値に従う)。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_progression: Option<PageProgression>,

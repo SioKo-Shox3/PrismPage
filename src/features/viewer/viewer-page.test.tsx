@@ -20,6 +20,7 @@ const book: OpenedBook = {
   bookId: '0123456789abcdef',
   title: 'テストの本',
   startIndex: 0,
+  openMode: 'book',
   pages: Array.from({ length: 5 }, (_, index) => ({
     name: `${index}.png`,
     width: 1000,
@@ -89,6 +90,9 @@ async function renderViewer(firstLabel = '1 / 5', entries = [`/viewer/${book.boo
   await router.load()
   const { container } = render(<RouterProvider router={router} />)
   await screen.findByText(firstLabel)
+  // 見出しが出た描画の副作用(キーの受け付けを最新の見開きで張り直す)を済ませてから操作する。
+  // 済ませないと、負荷が高いときに最初のキーが見開きの無い古い受け付けに届いて動かない。
+  await act(async () => {})
   const viewer = container.querySelector('[data-ui]') as HTMLElement
   return { viewer, router }
 }
@@ -707,6 +711,44 @@ describe('読み終わりの案内', () => {
     fireEvent.keyDown(window, { key: 'ArrowRight' })
     expect(screen.getByText('5 / 5')).toBeTruthy()
     expect(screen.queryByRole('heading', { name: '読み終わりました' })).toBeNull()
+  })
+})
+
+describe('開き方ごとの端の動き', () => {
+  it('画像ファイルを直接開いたときは、最後の次は最初へ、最初の前は最後へ回り、読み終わりの案内を出さない', async () => {
+    openedBook = { ...book, startIndex: 4, openMode: 'image' }
+    await renderViewer('5 / 5')
+    vi.useFakeTimers()
+
+    // 右綴じなので ← が次、→ が前。
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    expect(screen.getByText('1 / 5')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '読み終わりました' })).toBeNull()
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    expect(screen.getByText('5 / 5')).toBeTruthy()
+
+    // Home / End は回らずにその端へ移る。
+    fireEvent.keyDown(window, { key: 'Home' })
+    expect(screen.getByText('1 / 5')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'End' })
+    expect(screen.getByText('5 / 5')).toBeTruthy()
+
+    // 読書位置は今までどおり保存する。
+    act(() => vi.advanceTimersByTime(POSITION_SAVE_INTERVAL_MS))
+    expect(saved.position.mock.calls.at(-1)).toEqual([book.bookId, 4])
+  })
+
+  it('本として開いたときは最後の次で読み終わりの案内を出し、最初の前へは動かない', async () => {
+    openedBook = { ...book, startIndex: 0, openMode: 'book' }
+    await renderViewer('1 / 5')
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    expect(screen.getByText('1 / 5')).toBeTruthy()
+
+    fireEvent.keyDown(window, { key: 'End' })
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    expect(screen.getByRole('heading', { name: '読み終わりました' })).toBeTruthy()
   })
 })
 

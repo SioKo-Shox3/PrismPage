@@ -11,6 +11,7 @@ const book: OpenedBook = {
   bookId: '0123456789abcdef',
   title: 'テストの本',
   startIndex: 0,
+  openMode: 'book',
   pages: Array.from({ length: 10 }, (_, index) => ({ name: `${index}.png`, width: 1000, height: 1500 })),
 }
 

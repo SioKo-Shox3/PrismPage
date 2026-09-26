@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { OpenedBook, ViewSettings } from '@/types/app'
+import type { OpenedBook, OpenMode, ViewSettings } from '@/types/app'
 
 import { buildSpreads, type Spread } from './spread'
 import {
@@ -14,11 +14,12 @@ import {
   type ViewerState,
 } from './viewer-state'
 
-function book(pageCount: number, startIndex = 0): OpenedBook {
+function book(pageCount: number, startIndex = 0, openMode: OpenMode = 'book'): OpenedBook {
   return {
     bookId: '0123456789abcdef',
     title: 'テスト',
     startIndex,
+    openMode,
     pages: Array.from({ length: pageCount }, (_, index) => ({
       name: `${index}.png`,
       width: 1000,
@@ -38,10 +39,10 @@ const spreads: Spread[] = buildSpreads(book(5).pages, {
 
 const defaultView: ViewSettings = { spreadMode: 'auto', binding: 'right', coverSingle: true }
 
-function opened(pageCount = 5, startIndex = 0): ViewerState {
+function opened(pageCount = 5, startIndex = 0, openMode: OpenMode = 'book'): ViewerState {
   return viewerReducer(initialViewerState, {
     type: 'opened',
-    book: book(pageCount, startIndex),
+    book: book(pageCount, startIndex, openMode),
     defaults: defaultView,
   })
 }
@@ -66,6 +67,25 @@ describe('ビューアの状態', () => {
 
     const first = opened()
     expect(viewerReducer(first, { type: 'prev', spreads })).toBe(first)
+  })
+
+  it('画像ファイルを直接開いたときは、最後の見開きの次は最初へ、最初の見開きの前は最後へ回り、読み終わりにならない', () => {
+    let state = opened(5, 3, 'image')
+    state = viewerReducer(state, { type: 'next', spreads })
+    expect(state).toMatchObject({ page: 0, finished: false })
+
+    state = viewerReducer(state, { type: 'prev', spreads })
+    expect(state).toMatchObject({ page: 3, finished: false })
+
+    // 見開きの途中のページにいても、最後の見開きの前は 1 つ前の見開きへ普通に戻る。
+    state = viewerReducer(state, { type: 'prev', spreads })
+    expect(state).toMatchObject({ page: 1, finished: false })
+  })
+
+  it('画像ファイルを直接開いても、最初・最後へ飛ぶ操作は回らずその見開きへ移る', () => {
+    const state = opened(5, 2, 'image')
+    expect(viewerReducer(state, { type: 'first', spreads })).toMatchObject({ page: 0, finished: false })
+    expect(viewerReducer(state, { type: 'last', spreads })).toMatchObject({ page: 3, finished: false })
   })
 
   it('見開きの途中のページから始めても、そのページを含む見開きから前後へ動く', () => {
