@@ -9,6 +9,9 @@ export default mergeConfig(
     test: {
       environment: 'jsdom',
       include: ['src/**/*.test.{ts,tsx}'],
+      // 1,000 冊を描く画面のテストとその直後のテストは、手元でも 2 秒ほどかかり、
+      // CI の Windows ランナーでは既定の 5 秒を超えることがある。
+      testTimeout: 20_000,
     },
   }),
 )
