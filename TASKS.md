@@ -475,7 +475,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 - notes: ユーザー決定(2026-09-26)。spec 3.5 は更新済み。
 
 ## A-07: 「初めて開く本でも AI をオンにする」の設定
-- status: todo
+- status: done
 - done-when: 設定ストア `prismpage-settings` に `enhanceNewBooks: boolean`(既定 false)を足して version を 5 から 6 に上げ、version 2〜5 の保存は各項目を引き継いで新しい項目を既定値で補う(1 以前と未知の版は今の規則どおり既定値)。設定画面の「AI 超解像」に「初めて開く本でも AI をオンにする」の切り替えがある。本ごとの記録 `prismpage-enhanced-books` を、オンにした本だけでなく利用者が切り替えた本のオン・オフを覚える形(例: 本 ID → 真偽、古く切り替えた順に 500 冊まで)に変えて version を 1 から 2 に上げ、version 1 の `bookIds` はすべて「オン」の記録として引き継ぐ。記録の無い本はこの設定に従い、記録のある本は記録に従う(設定がオンでも、オフに切り替えた本はオフのまま)。テストが、設定の 5→6 の移行、本ごとの記録の 1→2 の移行、記録の無い本が設定に従うこと、オフの記録が設定より優先されることを確かめている。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`

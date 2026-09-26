@@ -34,10 +34,12 @@ export function AiSettings({ engineRevision = 0 }: { engineRevision?: number }) 
   const enhanceModels = useSettingsStore((state) => state.enhanceModels)
   const enhanceScale = useSettingsStore((state) => state.enhanceScale)
   const prefetchPages = useSettingsStore((state) => state.enhancePrefetchPages)
+  const enhanceNewBooks = useSettingsStore((state) => state.enhanceNewBooks)
   const setPreferredEngine = useSettingsStore((state) => state.setPreferredEngine)
   const setEnhanceModel = useSettingsStore((state) => state.setEnhanceModel)
   const setEnhanceScale = useSettingsStore((state) => state.setEnhanceScale)
   const setPrefetchPages = useSettingsStore((state) => state.setEnhancePrefetchPages)
+  const setEnhanceNewBooks = useSettingsStore((state) => state.setEnhanceNewBooks)
 
   // 登録したモデルを既定のモデルの候補にするため、エンジンの状態を読む。読めなくても選べる。
   const [statuses, setStatuses] = useState<EngineStatus[]>([])
@@ -148,6 +150,18 @@ export function AiSettings({ engineRevision = 0 }: { engineRevision?: number }) 
               ))}
             </select>
           </label>
+
+          <div className={styles.field}>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={enhanceNewBooks}
+                onChange={(event) => setEnhanceNewBooks(event.target.checked)}
+              />
+              初めて開く本でも AI をオンにする
+            </label>
+            <p className={styles.note}>ビューアでオン・オフを切り替えた本は、切り替えたとおりに開きます。</p>
+          </div>
         </article>
 
         <EnhanceCacheSettings />

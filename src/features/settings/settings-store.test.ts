@@ -11,6 +11,7 @@ function pickPersisted() {
     defaultCoverSingle: state.defaultCoverSingle,
     defaultSpreadMode: state.defaultSpreadMode,
     enhanceModels: state.enhanceModels,
+    enhanceNewBooks: state.enhanceNewBooks,
     enhancePrefetchPages: state.enhancePrefetchPages,
     enhanceScale: state.enhanceScale,
     preferredEngine: state.preferredEngine,
@@ -69,6 +70,7 @@ describe('設定ストアの永続化', () => {
       enhanceModels: { 'real-cugan': 'models-pro' },
       enhanceScale: 3,
       enhancePrefetchPages: 8,
+      enhanceNewBooks: true,
     }
     localStorage.setItem(
       STORAGE_KEY,
@@ -156,5 +158,27 @@ describe('設定ストアの永続化', () => {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')
     expect(saved.version).toBe(SETTINGS_VERSION)
     for (const key of retiredKeys) expect(saved.state).not.toHaveProperty(key)
+  })
+
+  it('version 5 の設定はすべての項目を引き継ぎ、初めて開く本の AI をオフで補う', async () => {
+    const version5 = {
+      defaultBinding: 'left',
+      defaultCoverSingle: false,
+      defaultSpreadMode: 'spread',
+      enhanceModels: { 'real-esrgan': 'realesr-animevideov3' },
+      enhancePrefetchPages: 8,
+      enhanceScale: 3,
+      preferredEngine: 'real-esrgan',
+      theme: 'ink',
+      wheelReversed: true,
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 5, state: version5 }))
+
+    await useSettingsStore.persist.rehydrate()
+
+    expect(pickPersisted()).toEqual({ ...version5, enhanceNewBooks: false })
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')
+    expect(saved.version).toBe(6)
+    expect(saved.state).toEqual({ ...version5, enhanceNewBooks: false })
   })
 })

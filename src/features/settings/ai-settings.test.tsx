@@ -74,6 +74,12 @@ describe('設定の AI 超解像', () => {
 
     fireEvent.change(screen.getByLabelText('先読み'), { target: { value: '8' } })
     expect(useSettingsStore.getState().enhancePrefetchPages).toBe(8)
+
+    const newBooks = screen.getByRole('checkbox', { name: '初めて開く本でも AI をオンにする' }) as HTMLInputElement
+    expect(newBooks.checked).toBe(false)
+    fireEvent.click(newBooks)
+    expect(useSettingsStore.getState().enhanceNewBooks).toBe(true)
+    expect(newBooks.checked).toBe(true)
   })
 
   it('キャッシュの上限を変えると Rust に渡し、消去は確認してから行って使用量を更新する', async () => {
