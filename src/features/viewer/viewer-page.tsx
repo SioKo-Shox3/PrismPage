@@ -31,6 +31,7 @@ import { sliderEnds, sliderIndexAt, sliderKeyIndex, sliderRatio } from './page-s
 import { PagePreloader, acquireImage, releaseImage } from './preload'
 import { useEnhancement, type EnhancementView } from './use-enhancement'
 import { useBookPersistence } from './use-book-persistence'
+import { WindowControls } from './window-controls'
 import { buildSpreads, pageToSpreadIndex, usesTwoPages, type Binding, type Spread } from './spread'
 import {
   UI_EDGE_BAND_PX,
@@ -881,6 +882,7 @@ function TopBar({
         本棚
       </Button>
       {menu.menu}
+      <WindowControls />
     </header>
   )
 }

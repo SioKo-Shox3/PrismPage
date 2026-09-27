@@ -15,10 +15,23 @@ let active = false
 // 今の全画面をビューアが作ったか。閉じるときに戻すかどうかを決める。
 let owned = false
 let queue: Promise<void> = Promise.resolve()
+// ウィンドウの操作が済むたびに呼ぶ(情報バーのウィンドウ操作を出すかを読み直す)。
+const listeners = new Set<() => void>()
 
 function enqueue(task: () => Promise<void>) {
   // 失敗(DOM の全画面が断られた等)は無視して次の操作へ進む。
-  queue = queue.then(task).catch(() => {})
+  queue = queue
+    .then(task)
+    .catch(() => {})
+    .then(() => listeners.forEach((listener) => listener()))
+}
+
+// ビューアの全画面の操作が済んだら知らせる。返した関数で知らせるのをやめる。
+export function subscribeViewerFullscreen(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }
 
 // ビューアを開いたことを知らせ、`enter` なら全画面にする。返した関数でビューアを閉じたことを知らせる。
@@ -59,5 +72,13 @@ export function toggleViewerFullscreen() {
     const fullscreen = await isWindowFullscreen()
     await setWindowFullscreen(!fullscreen)
     owned = !fullscreen
+  })
+}
+
+// 情報バーの「ウィンドウに戻す」: F / F11 でウィンドウに戻したときと同じく、閉じても戻し直さない。
+export function leaveViewerFullscreen() {
+  enqueue(async () => {
+    owned = false
+    await setWindowFullscreen(false)
   })
 }
