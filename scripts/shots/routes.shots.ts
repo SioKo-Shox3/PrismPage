@@ -109,6 +109,39 @@ for (const theme of themes) {
   })
 }
 
+// 全画面で情報バーを出した状態。右端に最小化・ウィンドウに戻す・アプリを閉じるが並ぶ。
+// モックは localStorage の `prismpage-mock-fullscreen` が '1' のとき、ウィンドウを全画面として扱う。
+for (const theme of themes) {
+  test(`${theme.name} viewer-bar-fullscreen`, async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    await page.emulateMedia({ colorScheme: theme.colorScheme })
+    await page.addInitScript(() => localStorage.setItem('prismpage-mock-fullscreen', '1'))
+
+    await page.goto('/viewer/sample-manga')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme.name)
+    await expect(page.getByRole('slider', { name: 'ページ移動' })).toBeVisible()
+    await page.waitForFunction('document.fonts.status === "loaded"')
+
+    const viewport = page.viewportSize()
+    if (!viewport) throw new Error('画面の大きさが分かりません')
+    await page.mouse.move(viewport.width / 2, 8)
+    await expect(page.locator('[data-ui]')).toHaveAttribute('data-ui', 'visible')
+    const controls = page.getByRole('group', { name: 'ウィンドウの操作' })
+    await expect(controls.getByRole('button', { name: '最小化' })).toBeVisible()
+    await expect(controls.getByRole('button', { name: 'ウィンドウに戻す' })).toBeVisible()
+    await expect(controls.getByRole('button', { name: 'アプリを閉じる' })).toBeVisible()
+    // ボタンが情報バーの右端に付いている。
+    const bar = await page.locator('header').first().boundingBox()
+    const close = await controls.getByRole('button', { name: 'アプリを閉じる' }).boundingBox()
+    if (!bar || !close) throw new Error('情報バーかボタンの位置が分かりません')
+    expect(Math.round(close.x + close.width)).toBe(Math.round(bar.x + bar.width))
+
+    await page.screenshot({ path: path.join(shotsDir, `${theme.name}-viewer-bar-fullscreen.png`) })
+    expect(pageErrors).toEqual([])
+  })
+}
+
 // 最後の見開きの次に出す読み終わりの案内。End で最後の見開きへ動き、PageDown で次へ送る。
 for (const theme of themes) {
   test(`${theme.name} viewer-finished`, async ({ page }) => {

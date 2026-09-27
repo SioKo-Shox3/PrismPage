@@ -508,7 +508,7 @@ UI を変えるタスクは `run shots`(B-04 で導入)で撮ったスクリー�
 # MS11 全画面のウィンドウ操作(0.2.4 の実機確認から)
 
 ## V-14: 全画面のビューアで、情報バーの右端に最小化・ウィンドウに戻す・閉じるを出す
-- status: todo
+- status: done
 - done-when: ビューアのウィンドウが全画面の間、情報バーを出したとき(上端の帯・中央クリック)だけ、情報バーの右端に Windows のタイトルバーと同じ並びの「最小化」「ウィンドウに戻す」「閉じる」のボタンを出す(幅 46px 前後・高さは情報バーに合わせる。アイコンは lucide の Minus・Copy・X など。閉じるの hover は朱の地)。「最小化」はウィンドウを最小化し(戻したときは全画面のまま)、「ウィンドウに戻す」は F / F11 と同じくウィンドウに戻し(`fullscreen-session` の切り替えを使い、閉じても戻し直さない扱いにする)、「閉じる」はアプリを終了する(Windows の × と同じ)。ウィンドウ表示のとき(設定で全画面にしない・F で戻した)はこのボタンを出さない。全画面かどうかは、切り替えのたびとウィンドウの大きさが変わったとき(`onResized` など)に `isWindowFullscreen` で読み直す。呼び出しは `src/lib/window-fullscreen.ts`(か同じ場所のウィンドウ操作のラッパー)にまとめ、モック(ブラウザ)では最小化・閉じるは何もしない。`src-tauri/capabilities/default.json` に `core:window:allow-minimize` と `core:window:allow-close` を足す。各ボタンの `aria-label`(「最小化」「ウィンドウに戻す」「アプリを閉じる」)があり、全画面のときだけ出ること・押したときにラッパーが呼ばれることのテストがある。紙・墨の `run shots` に全画面で情報バーを出した画面を足し(モックで全画面として描く)、開いてボタンが右端に並んでいることを見ている。
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run test`
 - verify: `node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" run lint`

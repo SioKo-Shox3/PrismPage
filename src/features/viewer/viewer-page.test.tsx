@@ -16,8 +16,8 @@ const saved = vi.hoisted(() => ({
   close: vi.fn<(bookIds: string[]) => Promise<void>>(() => Promise.resolve()),
 }))
 
-// ウィンドウの全画面のラッパーの代わり。呼び出しの順を `calls` に残す。
-const win = vi.hoisted(() => ({ fullscreen: false, calls: [] as boolean[] }))
+// ウィンドウの全画面のラッパーの代わり。全画面の呼び出しの順を `calls`、最小化・閉じるを `ops` に残す。
+const win = vi.hoisted(() => ({ fullscreen: false, calls: [] as boolean[], ops: [] as string[] }))
 
 vi.mock('@/lib/window-fullscreen', () => ({
   isWindowFullscreen: () => Promise.resolve(win.fullscreen),
@@ -26,6 +26,15 @@ vi.mock('@/lib/window-fullscreen', () => ({
     win.fullscreen = fullscreen
     return Promise.resolve()
   },
+  minimizeWindow: () => {
+    win.ops.push('minimize')
+    return Promise.resolve()
+  },
+  closeWindow: () => {
+    win.ops.push('close')
+    return Promise.resolve()
+  },
+  onWindowResized: () => () => {},
 }))
 
 const book: OpenedBook = {
@@ -84,6 +93,7 @@ beforeEach(() => {
   openedBook = book
   win.fullscreen = false
   win.calls.length = 0
+  win.ops.length = 0
   saved.position.mockReset().mockImplementation(() => Promise.resolve())
   saved.view.mockReset().mockImplementation(() => Promise.resolve())
   saved.open.mockReset().mockImplementation(() => Promise.resolve(openedBook))
@@ -913,6 +923,32 @@ describe('ビューアの全画面', () => {
     expect(win.fullscreen).toBe(true)
   })
 
+  it('全画面の間は情報バーの右端に最小化・ウィンドウに戻す・アプリを閉じるを出し、押すとウィンドウを操作する', async () => {
+    await renderViewer()
+    await vi.waitFor(() => expect(win.calls).toEqual([true]))
+    const controls = await screen.findByRole('group', { name: 'ウィンドウの操作' })
+    expect(controls.closest('header')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '最小化' }))
+    expect(win.ops).toEqual(['minimize'])
+    fireEvent.click(screen.getByRole('button', { name: 'アプリを閉じる' }))
+    expect(win.ops).toEqual(['minimize', 'close'])
+  })
+
+  it('「ウィンドウに戻す」でウィンドウに戻すと操作は消え、その後に閉じてもウィンドウの状態を変えない', async () => {
+    const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
+    await vi.waitFor(() => expect(win.calls).toEqual([true]))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ウィンドウに戻す' }))
+    await vi.waitFor(() => expect(win.calls).toEqual([true, false]))
+    await vi.waitFor(() => expect(screen.queryByRole('group', { name: 'ウィンドウの操作' })).toBeNull())
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))
+    await settleWindow()
+    expect(win.calls).toEqual([true, false])
+  })
+
   describe('設定で全画面で開かないとき', () => {
     beforeEach(async () => {
       const { useSettingsStore } = await import('@/features/settings/settings-store')
@@ -924,11 +960,12 @@ describe('ビューアの全画面', () => {
       useSettingsStore.setState({ viewerFullscreen: true })
     })
 
-    it('開いても閉じてもウィンドウのまま', async () => {
+    it('開いても閉じてもウィンドウのままで、ウィンドウの操作は出さない', async () => {
       const { router } = await renderViewer('1 / 5', [folder, `/viewer/${book.bookId}`])
       await settleWindow()
       expect(win.calls).toEqual([])
       expect(win.fullscreen).toBe(false)
+      expect(screen.queryByRole('group', { name: 'ウィンドウの操作' })).toBeNull()
 
       fireEvent.keyDown(window, { key: 'Escape' })
       await vi.waitFor(() => expect(router.state.location.pathname).toBe('/folders'))

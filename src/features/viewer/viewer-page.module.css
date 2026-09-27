@@ -423,3 +423,38 @@
     transition: none;
   }
 }
+
+/* 全画面の間だけ情報バーの右端に出すウィンドウ操作。Windows のタイトルバーと同じく右端と上下の端に付ける */
+.windowControls {
+  display: flex;
+  align-self: stretch;
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-4)) calc(-1 * var(--space-2)) var(--space-2);
+}
+
+.windowButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+.windowButton:hover {
+  background: var(--color-surface-sunken);
+}
+
+.windowButton:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.windowClose:hover {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
